@@ -1,0 +1,7 @@
+# 外层仓库采用白名单:默认忽略一切,只跟踪明确列出的定制层内容
+# (SDK 本体由 .repo 子仓库管理,各自的定制改动在其 nvr-custom 分支)
+/*
+
+!/.gitignore
+!/CLAUDE.md
+!/docker/

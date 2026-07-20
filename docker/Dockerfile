@@ -1,0 +1,31 @@
+# RK3566 Linux5.10 SDK 编译环境
+# 构建: docker build -t nvr-os-builder:20.04 docker/
+# 使用: docker/run.sh [命令],默认进入 bash
+FROM ubuntu:20.04
+
+ENV DEBIAN_FRONTEND=noninteractive TZ=Asia/Shanghai LANG=en_US.UTF-8
+
+# Rockchip 官方依赖 + kernel/buildroot/debian rootfs 构建所需
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ssh openssh-client ca-certificates \
+    make gcc g++ gcc-multilib g++-multilib patchelf chrpath \
+    libssl-dev libncurses-dev liblz4-tool lz4 zstd bzip2 xz-utils unzip cpio \
+    expect gawk texinfo diffstat bison flex fakeroot cmake bc \
+    device-tree-compiler u-boot-tools \
+    binfmt-support qemu-user-static live-build \
+    python2 python3 python3-pip python3-pyelftools python-is-python3 \
+    rsync file wget curl locales sudo time kmod \
+    mtools dosfstools parted e2fsprogs \
+    && rm -rf /var/lib/apt/lists/* \
+    && locale-gen en_US.UTF-8
+
+# 与宿主机用户同 UID/GID,保证挂载目录文件属主一致
+RUN groupadd -g 1000 builder && useradd -m -u 1000 -g 1000 -s /bin/bash builder \
+    && echo 'builder ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/builder
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+WORKDIR /sdk
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["/bin/bash"]
