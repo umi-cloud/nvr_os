@@ -19,6 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && locale-gen en_US.UTF-8
 
+# bookworm rootfs 构建需要新版 debootstrap 和 bookworm 签名密钥(focal 自带的都太旧)
+RUN curl -fsSL -o /tmp/debootstrap.deb http://deb.debian.org/debian/pool/main/d/debootstrap/debootstrap_1.0.144_all.deb \
+    && curl -fsSL -o /tmp/keyring.deb http://deb.debian.org/debian/pool/main/d/debian-archive-keyring/debian-archive-keyring_2023.3+deb12u2_all.deb \
+    && dpkg -i /tmp/debootstrap.deb /tmp/keyring.deb \
+    && rm /tmp/debootstrap.deb /tmp/keyring.deb
+
 # 与宿主机用户同 UID/GID,保证挂载目录文件属主一致
 RUN groupadd -g 1000 builder && useradd -m -u 1000 -g 1000 -s /bin/bash builder \
     && echo 'builder ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/builder

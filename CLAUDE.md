@@ -24,6 +24,14 @@ docker/run.sh ./mkfirmware.sh     # 产物汇总到 rockdev/
 - run.sh 使用 `--privileged --network=host`:前者供 rootfs 构建 chroot/mount,后者保证容器内在线装包
 - 容器内用户 `builder`(UID 1000,与宿主机一致),挂载 SDK 到 `/sdk`
 
+## rootfs
+
+- **NVR 板(nvr-ddr3)**:Debian 12 bookworm **headless**(glibc 2.36),`debian/mk-rootfs-bookworm.sh` debootstrap 直建,含 mpp/rga/rknpu2(rknn_server 默认不启用)/libmali-g13p0-gbm/WiFi·BT 固件;开发期账号 root/root(量产前必须改)
+- dragon 板仍为 Debian 11 桌面版(linaro 基底流程,未动)
+- 基底缓存 `debian/bookworm-base-arm64.tar.gz`,删掉会重新 debootstrap
+- 注意:`buildroot/output/` 的 host 工具是前人机器编译的,在容器里跑会报 GLIBC 版本错;
+  需要动 buildroot(如 recovery)时先在容器内清理重编
+
 ## 板级配置
 
 - 选板:`./build.sh lunch`,配置文件在 `device/rockchip/rk356x/BoardConfig-*.mk`,选中后软链到 `device/rockchip/.BoardConfig.mk`
