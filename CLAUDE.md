@@ -45,8 +45,10 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - **NVR 板(nvr-ddr3)**:Debian 12 bookworm **headless**(glibc 2.36),`debian/mk-rootfs-bookworm.sh` debootstrap 直建,含 mpp/rga/rknpu2(rknn_server 默认不启用)/libmali-g13p0-gbm/WiFi·BT 固件;开发期账号 root/root(量产前必须改)
 - dragon 板仍为 Debian 11 桌面版(linaro 基底流程,未动)
 - 基底缓存 `debian/bookworm-base-arm64.tar.gz`,删掉会重新 debootstrap
-- 注意:`buildroot/output/` 的 host 工具是前人机器编译的,在容器里跑会报 GLIBC 版本错;
-  需要动 buildroot(如 recovery)时先在容器内清理重编
+- recovery:`./docker/run.sh ./build.sh recovery` 已在容器内打通(全新 output 重编,含 6.1 内核);
+  旧的 `buildroot/output/rockchip_rk3566`(50G,前人 buildroot rootfs)和 `rockchip_rk356x_recovery.old-5.10`(12G)
+  是前人机器产物,现方案未使用,确认后可删
+- 备份的旧版 recovery:根目录 `recovery-legacy-5.10.img`(新 recovery 上板验证 OK 后可删)
 
 ## 板级配置
 
