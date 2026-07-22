@@ -6,16 +6,16 @@ Rockchip RK3566 Linux SDK,双内核并存:
 
 内核目录由 BoardConfig 的 `RK_KERNEL_DIR` 选择(默认 `kernel`,dragon 板仍用 5.10)。
 
-## 6.1 迁移遗留项(WiFi 非主要功能,已确认延后)
+## 硬件说明
 
-- rtl8822cs WiFi 驱动移植(6.1 树只有 Broadcom rkwifi;mainline rtw88 SDIO 需 6.4+)
-- bluetooth_uart_driver、vfd 驱动移植(5.10 的自定义驱动;dts 节点已留好,vfd 为 disabled)
-- sdmmc supports-* 旧式属性未移植(6.1 官方属性优先,异常再查)
+**本板无 WiFi/BT/vfd 硬件**(dts 已禁用相关节点,内核裁剪 WLAN/BT 协议栈,rootfs 无相关组件)。
+dragon 板(5.10)保留全部原配置。
 
 已完成:librknnrt 2.3.2(配 rknpu 0.9.8);首块板整机点亮验证(eMMC/网口/加速全家/分区自适应);
 开机 logo 全程无缝(u-boot drm-logo 预留页对齐补丁 + 360px um 标志);
 DDR 动态调频(opp 适配 DDR3 频点 + 使能 dfi + auto-freq-en=1,空闲 324MHz↔负载 1056MHz 实测闭环;
-建议量产前跑通宵压力浸泡)。
+建议量产前跑通宵压力浸泡);WiFi/BT/vfd 全量裁剪。
+待观察:sdmmc supports-* 旧式属性未移植(6.1 官方属性优先,异常再查)。
 
 ## 编译:一律使用 docker 环境
 
