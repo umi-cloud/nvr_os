@@ -45,10 +45,10 @@ docker/run.sh ./mkfirmware.sh     # 产物汇总到 rockdev/
 ## 板级配置
 
 - 选板:`./build.sh lunch`,配置文件在 `device/rockchip/rk356x/BoardConfig-*.mk`,选中后软链到 `device/rockchip/.BoardConfig.mk`
-- 区分逻辑:芯片级(`RK_UBOOT_DEFCONFIG`、rkbin loader)/ 板级(`RK_KERNEL_DTS`,核心)/ 系统级(buildroot config、分区表 parameter)
+- 区分逻辑:芯片级(`RK_UBOOT_DEFCONFIG`、rkbin loader)/ 板级(`RK_KERNEL_DIR` 选内核树 + `RK_KERNEL_DTS`,核心)/ 系统级(rootfs、分区表 parameter)
 - 现有板子:
-  - `BoardConfig-rk3566-evb2-lp4x-v10.mk`:前人定制的机顶盒板("dragon"),DTS `rk3566-box-demo-v10_rtl8211f`(另有 `_ip1001` PHY 变体)
-  - `BoardConfig-rk3566-nvr-ddr3-v10.mk`:NVR 板,8颗 8bit DDR3,DTS `rk3566-nvr-ddr3-v10`(薄封装 include rtl8211f dtsi)
+  - `BoardConfig-rk3566-evb2-lp4x-v10.mk`:前人定制的机顶盒板("dragon"),5.10 内核,DTS `rk3566-box-demo-v10_rtl8211f`(另有 `_ip1001` PHY 变体)
+  - `BoardConfig-rk3566-nvr-ddr3-v10.mk`:NVR 板,8颗 8bit DDR3,**kernel-6.1** + DTS `rk3566-nvr-ddr3-v10`(override 风格,基于官方 box-demo dtsi,含电源域 1.8V/RGMII 时延等实板参数)+ defconfig 片段 `nvr.config`
 - DDR 类型由 rkbin 闭源 blob 自动识别(DDR3/DDR4/LP4X 同一 blob),换内存不改源码;调参用 `rkbin/tools/ddrbin_tool`
 
 ## git 仓库结构(重要)
@@ -56,7 +56,8 @@ docker/run.sh ./mkfirmware.sh     # 产物汇总到 rockdev/
 - 本目录是 repo 工具管理的多仓库结构(`.repo/` + 各子仓库自带 `.git`)
 - **外层 `git add .` 不会收编子仓库内容**(只记 gitlink),勿直接全量提交
 - 所有定制改动已提交在各子仓库的 `nvr-custom` 分支(kernel、u-boot、buildroot、debian、device/rockchip、docs、tools、external/rkwifibt 等 10 个仓库);新改动继续提交到对应子仓库的 `nvr-custom`
-- 与官方基线对比:`git -C kernel diff linux-5.10-gen-rkr3.3 nvr-custom`
+- `kernel-6.1/` 不归 repo 工具管,是独立 git 克隆(remote 为 armbian/linux-rockchip,可拉取更新),定制同样在 `nvr-custom` 分支
+- 与官方基线对比:`git -C kernel diff linux-5.10-gen-rkr3.3 nvr-custom`;6.1 用 `git -C kernel-6.1 diff origin/rk-6.1-rkr6.1 nvr-custom`
 - 不入库:`buildroot/output/`(50G 构建产物)、`buildroot/dl/`、`rockdev/`、`.repo/`
 - 子仓库远程指向 Rockchip Gerrit,不可推送
 
