@@ -26,10 +26,15 @@ docker build --network=host -t nvr-os-builder:20.04 docker/
 docker/run.sh
 
 # 直接执行构建
-docker/run.sh ./build.sh kernel
-docker/run.sh ./build.sh all      # uboot + kernel + rootfs
-docker/run.sh ./mkfirmware.sh     # 产物汇总到 rockdev/
+docker/run.sh ./build.sh uboot    # loader + uboot.img
+docker/run.sh ./build.sh kernel   # 内核(NVR 板为 6.1)→ boot.img
+docker/run.sh ./build.sh debian   # bookworm rootfs
+./mkfirmware.sh                   # 在宿主机跑!汇总到 rockdev/
 ```
+
+mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(GLIBC),
+且容器内执行会把 rockdev 软链写成 /sdk 绝对路径导致宿主机断链。
+不要用 `build.sh all`(会触发 buildroot,容器内必失败)。
 
 - 镜像:Ubuntu 20.04,含 Rockchip 官方依赖 + qemu-user-static/binfmt(debian rootfs 的 arm64 chroot 需要)
 - run.sh 使用 `--privileged --network=host`:前者供 rootfs 构建 chroot/mount,后者保证容器内在线装包
