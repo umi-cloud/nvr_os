@@ -1,7 +1,17 @@
 # nvr_os — RK3566 Linux SDK
 
-Rockchip RK3566 Linux5.10 SDK(基线 tag `linux-5.10-gen-rkr3.3`,kernel 5.10.110,Debian 11 / Buildroot rootfs)。
-来源:官方 Gerrit(`ssh://git@www.rockchip.com.cn`,本机无账号,同步需授权机器)。
+Rockchip RK3566 Linux SDK,双内核并存:
+- `kernel/`:5.10.110(基线 `linux-5.10-gen-rkr3.3`,官方 Gerrit 同步,本机无账号)
+- `kernel-6.1/`:6.1(armbian 官方镜像 `rk-6.1-rkr6.1` = `linux-6.1-stan-rkr6.1`,无需账号)——**NVR 板当前使用**
+
+内核目录由 BoardConfig 的 `RK_KERNEL_DIR` 选择(默认 `kernel`,dragon 板仍用 5.10)。
+
+## 6.1 迁移遗留项(WiFi 非主要功能,已确认延后)
+
+- rtl8822cs WiFi 驱动移植(6.1 树只有 Broadcom rkwifi;mainline rtw88 SDIO 需 6.4+)
+- bluetooth_uart_driver、vfd 驱动移植(5.10 的自定义驱动;dts 节点已留好,vfd 为 disabled)
+- librknnrt 1.4.0 → 2.x 升级(配合 6.1 更新的 rknpu 驱动,从 airockchip/rknn-toolkit2 取)
+- sdmmc supports-* 旧式属性未移植(6.1 官方属性优先,异常再查)
 
 ## 编译:一律使用 docker 环境
 
