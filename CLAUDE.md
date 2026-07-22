@@ -79,4 +79,5 @@ dragon 板仍用旧表 parameter-buildroot-fit.txt。改分区表必须整机重
 ## 烧写
 
 `rockdev/` 下产物用 RKDevTool(Windows,`RKDevTool_Release_v3.19/`)或 `rkflash.sh` / upgrade_tool 烧写。
+整机包:`./build.sh updateimg`(宿主机跑)→ `rockdev/update.img`,RKDevTool 升级固件页或 upgrade_tool uf 一键烧。
 串口调试波特率 1500000,开机最早的 DDR training 打印可确认内存识别(类型/容量/rank)。
