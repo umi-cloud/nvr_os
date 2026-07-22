@@ -25,6 +25,14 @@ RUN curl -fsSL -o /tmp/debootstrap.deb http://deb.debian.org/debian/pool/main/d/
     && dpkg -i /tmp/debootstrap.deb /tmp/keyring.deb \
     && rm /tmp/debootstrap.deb /tmp/keyring.deb
 
+# buildroot(recovery 等)额外依赖,独立一层避免重建主依赖层
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    patch perl less \
+    && rm -rf /var/lib/apt/lists/*
+
+# 非交互构建:禁用分页器(repo/git 在 tty 下会调 less 挂起构建)
+ENV PAGER=cat GIT_PAGER=cat
+
 # 与宿主机用户同 UID/GID,保证挂载目录文件属主一致
 RUN groupadd -g 1000 builder && useradd -m -u 1000 -g 1000 -s /bin/bash builder \
     && echo 'builder ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/builder
