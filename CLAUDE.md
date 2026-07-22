@@ -6,6 +6,18 @@ Rockchip RK3566 Linux SDK,双内核并存:
 
 内核目录由 BoardConfig 的 `RK_KERNEL_DIR` 选择(默认 `kernel`,dragon 板仍用 5.10)。
 
+## GPU(Mali-G52 Bifrost)
+
+- 内核配置**必须叠加官方芯片片段** `rk3566.config`(6.1 把 GPU 配置从 defconfig 拆了出来):
+  `RK_KERNEL_DEFCONFIG_FRAGMENT="rk3566.config nvr.config"`。漏了会只编 mali400(Utgard),
+  与 G52 不匹配 → 无 `/dev/mali0`、GLES/OpenCL 全废
+- 用户态 libmali-bifrost-g52-**g13p0**-gbm 与内核 kbase **g25p0** 可互操作(实测,ArmSoM 6.1 SDK 同样配对)
+- 库在 `/usr/lib/aarch64-linux-gnu/mali/`(libEGL/libGLESv2/libgbm/libMaliOpenCL),
+  该路径已在 ld.so.conf.d 中,应用直接 `-lEGL -lGLESv2` 即可
+- **应用集成注意**:这是 gbm 变体,EGL native display 必须传 `gbm_create_device(open("/dev/dri/renderD128"))`
+  的返回值,传 `EGL_DEFAULT_DISPLAY` 会 eglInitialize 失败
+- 实测:GL_RENDERER=Mali-G52、OpenGL ES 3.2;OpenCL 3.0 设备 Mali-G52 r1p0
+
 ## 硬件说明
 
 **本板无 WiFi/BT/vfd 硬件**(dts 已禁用相关节点,内核裁剪 WLAN/BT 协议栈,rootfs 无相关组件)。
