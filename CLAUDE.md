@@ -11,8 +11,10 @@ Rockchip RK3566 Linux SDK,双内核并存:
 - rtl8822cs WiFi 驱动移植(6.1 树只有 Broadcom rkwifi;mainline rtw88 SDIO 需 6.4+)
 - bluetooth_uart_driver、vfd 驱动移植(5.10 的自定义驱动;dts 节点已留好,vfd 为 disabled)
 - sdmmc supports-* 旧式属性未移植(6.1 官方属性优先,异常再查)
+- dmc(DDR 动态调频)probe -34 未启用,DDR 固定 1056MHz 满频——功能无损,功耗优化项(调 opp 表)
 
-已完成:librknnrt 已升 2.3.2(配 rknpu 驱动 0.9.8,rootfs 内置)。
+已完成:librknnrt 2.3.2(配 rknpu 0.9.8);首块板整机点亮验证(eMMC/网口/加速全家/分区自适应);
+开机 logo 全程无缝(u-boot drm-logo 预留页对齐补丁 + 360px um 标志)。
 
 ## 编译:一律使用 docker 环境
 
