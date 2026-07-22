@@ -67,6 +67,15 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - 不入库:`buildroot/output/`(50G 构建产物)、`buildroot/dl/`、`rockdev/`、`.repo/`
 - 子仓库远程指向 Rockchip Gerrit,不可推送
 
+## 分区(NVR 板,parameter-nvr.txt)
+
+uboot 4M / misc 4M / **boot 128M** / recovery 64M / **rootfs 4G** / **userdata 6G** / **vcache:grow**(64G/128G eMMC 通用)。
+userdata、vcache 不烧镜像,首次开机由 `format-data-parts.service` 自动 mkfs 并按 PARTLABEL 挂载到 `/userdata`、`/vcache`。
+dragon 板仍用旧表 parameter-buildroot-fit.txt。改分区表必须整机重烧。
+
+注意:若 mkfirmware 在 envsetup 阶段报错退出(buildroot output 配置路径不一致),
+先执行 `cd buildroot && source build/envsetup.sh rockchip_rk3566` 刷新一次即可。
+
 ## 烧写
 
 `rockdev/` 下产物用 RKDevTool(Windows,`RKDevTool_Release_v3.19/`)或 `rkflash.sh` / upgrade_tool 烧写。
