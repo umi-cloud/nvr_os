@@ -29,12 +29,14 @@ Rockchip RK3566 Linux SDK,双内核并存:
 
 ## 视频编解码(MPP + GStreamer)
 
-- rootfs 内置 gst 1.22 + `gstreamer1.0-rockchip1` 插件:`mppvideodec` / `mpph264enc` /
+- rootfs 内置 gst 1.22(tools/base/good)+ `gstreamer1.0-rockchip1` 插件:`mppvideodec` / `mpph264enc` /
   `mpph265enc` / `mppjpegdec|enc`,以及 kmssrc/rkximagesink;NVR 解码链示例:
   `rtspsrc ! rtph264depay ! h264parse ! mppvideodec ! kmssink`
 - **版本陷阱**:mpp/gst 插件的 deb 必须用 bookworm 构建(packages/arm64 已换)。
   bullseye 旧构建版本号同为 1.5.0-1,但配 6.1 内核会在 MPP 层直接段错误
   (mpi_enc_test 都崩);版本号相同不代表构建相同,以实测为准
+- **勿装 gstreamer1.0-plugins-bad 元包**(依赖链拖入 LLVM/GTK/flite 约 300M):
+  h264/h265parse 与 kmssink 由构建脚本从 bad 的 deb 中定向抽取
 - 基准(实测):H264 硬编 720p 285fps/硬解 445fps;H265 硬编 113fps/硬解 712fps(720p),gst 1080p 闭环通过;快速自检
   `mpi_enc_test -w 640 -h 480 -t 7 -n 10 -o /tmp/s.h264` 应输出非零码流
 
