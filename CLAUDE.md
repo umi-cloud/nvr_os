@@ -11,11 +11,16 @@ Rockchip RK3566 Linux SDK,双内核并存:
 - 内核配置**必须叠加官方芯片片段** `rk3566.config`(6.1 把 GPU 配置从 defconfig 拆了出来):
   `RK_KERNEL_DEFCONFIG_FRAGMENT="rk3566.config nvr.config"`。漏了会只编 mali400(Utgard),
   与 G52 不匹配 → 无 `/dev/mali0`、GLES/OpenCL 全废
-- 用户态 libmali-bifrost-g52-**g13p0**-gbm 与内核 kbase **g25p0** 可互操作(实测,ArmSoM 6.1 SDK 同样配对)
+- 用户态 libmali-bifrost-g52-**g13p0**-x11-wayland-gbm(同时支持 GBM/X11/Wayland),
+  与内核 kbase **g25p0** 可互操作——版本号不同是正常的:Rockchip/ArmSoM 的 6.1 SDK
+  给 bifrost-g52 配的就是 g13p0(g24p0 只用于 rk3588 的 valhall-g610),实测 GLES 3.2 + OpenCL 3.0 正常
+- 不要用 gbm-only 变体:它只导出 `EGL_KHR_platform_gbm`,Chromium(X11)和 cog/cage(Wayland)全废
 - 库在 `/usr/lib/aarch64-linux-gnu/mali/`(libEGL/libGLESv2/libgbm/libMaliOpenCL),
   该路径已在 ld.so.conf.d 中,应用直接 `-lEGL -lGLESv2` 即可
-- **应用集成注意**:这是 gbm 变体,EGL native display 必须传 `gbm_create_device(open("/dev/dri/renderD128"))`
-  的返回值,传 `EGL_DEFAULT_DISPLAY` 会 eglInitialize 失败
+- **应用集成注意**(多平台变体下必须这么写,否则**段错误**):原生 DRM/KMS 程序要用
+  `eglGetPlatformDisplayEXT(EGL_PLATFORM_GBM_KHR, gbm_create_device(open("/dev/dri/renderD128")), NULL)`。
+  旧写法 `eglGetDisplay(gbm_dev)` 在 gbm-only 变体上能用,换成多平台变体后会被误判为 X11 Display* 而崩溃;
+  传 `EGL_DEFAULT_DISPLAY` 则 eglInitialize 失败
 - 实测:GL_RENDERER=Mali-G52、OpenGL ES 3.2;OpenCL 3.0 设备 Mali-G52 r1p0
 - GPU DVFS:rk356x.dtsi 的 gpu_opp_table 漏了每条 OPP 的 `opp-supported-hw`(表级
   `rockchip,supported-hw` 却在),会导致全部 OPP 被否 → 无 devfreq;板级 dts 已补齐,
