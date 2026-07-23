@@ -17,6 +17,9 @@ Rockchip RK3566 Linux SDK,双内核并存:
 - **应用集成注意**:这是 gbm 变体,EGL native display 必须传 `gbm_create_device(open("/dev/dri/renderD128"))`
   的返回值,传 `EGL_DEFAULT_DISPLAY` 会 eglInitialize 失败
 - 实测:GL_RENDERER=Mali-G52、OpenGL ES 3.2;OpenCL 3.0 设备 Mali-G52 r1p0
+- GPU DVFS:rk356x.dtsi 的 gpu_opp_table 漏了每条 OPP 的 `opp-supported-hw`(表级
+  `rockchip,supported-hw` 却在),会导致全部 OPP 被否 → 无 devfreq;板级 dts 已补齐,
+  现为 200/300/400/600/700MHz simple_ondemand(800MHz 档被 rk3566-box.dtsi 删除)
 
 ## 硬件说明
 
