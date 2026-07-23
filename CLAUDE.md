@@ -27,6 +27,17 @@ Rockchip RK3566 Linux SDK,双内核并存:
   `rockchip,supported-hw` 却在),会导致全部 OPP 被否 → 无 devfreq;板级 dts 已补齐,
   现为 200/300/400/600/700MHz simple_ondemand(800MHz 档被 rk3566-box.dtsi 删除)
 
+## 视频编解码(MPP + GStreamer)
+
+- rootfs 内置 gst 1.22 + `gstreamer1.0-rockchip1` 插件:`mppvideodec` / `mpph264enc` /
+  `mpph265enc` / `mppjpegdec|enc`,以及 kmssrc/rkximagesink;NVR 解码链示例:
+  `rtspsrc ! rtph264depay ! h264parse ! mppvideodec ! kmssink`
+- **版本陷阱**:mpp/gst 插件的 deb 必须用 bookworm 构建(packages/arm64 已换)。
+  bullseye 旧构建版本号同为 1.5.0-1,但配 6.1 内核会在 MPP 层直接段错误
+  (mpi_enc_test 都崩);版本号相同不代表构建相同,以实测为准
+- 基准(实测):硬编 720p 285fps、硬解 445fps;快速自检
+  `mpi_enc_test -w 640 -h 480 -t 7 -n 10 -o /tmp/s.h264` 应输出非零码流
+
 ## 硬件说明
 
 **本板无 WiFi/BT/vfd 硬件**(dts 已禁用相关节点,内核裁剪 WLAN/BT 协议栈,rootfs 无相关组件)。
