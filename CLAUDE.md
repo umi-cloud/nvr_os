@@ -11,9 +11,10 @@ Rockchip RK3566 Linux SDK,双内核并存:
 - 内核配置**必须叠加官方芯片片段** `rk3566.config`(6.1 把 GPU 配置从 defconfig 拆了出来):
   `RK_KERNEL_DEFCONFIG_FRAGMENT="rk3566.config nvr.config"`。漏了会只编 mali400(Utgard),
   与 G52 不匹配 → 无 `/dev/mali0`、GLES/OpenCL 全废
-- 用户态 libmali-bifrost-g52-**g13p0**-x11-wayland-gbm(同时支持 GBM/X11/Wayland),
-  与内核 kbase **g25p0** 可互操作——版本号不同是正常的:Rockchip/ArmSoM 的 6.1 SDK
-  给 bifrost-g52 配的就是 g13p0(g24p0 只用于 rk3588 的 valhall-g610),实测 GLES 3.2 + OpenCL 3.0 正常
+- 用户态 libmali-bifrost-g52-**g24p0**-x11-wayland-gbm(同时支持 GBM/X11/Wayland),
+  与内核 kbase **g25p0** 相邻代配对。实测 EGL 1.5、GLES 3.2、OpenCL 3.0 全通过,
+  X11 路径为 DRI3(依赖 libxcb-dri3/present/xfixes,构建脚本已带)
+- 备注:官方 6.1 SDK 脚本默认给 rk356x 选 g13p0(EGL 1.4、2020 年库),包目录里留有其 deb 作回退
 - 不要用 gbm-only 变体:它只导出 `EGL_KHR_platform_gbm`,Chromium(X11)和 cog/cage(Wayland)全废
 - 库在 `/usr/lib/aarch64-linux-gnu/mali/`(libEGL/libGLESv2/libgbm/libMaliOpenCL),
   该路径已在 ld.so.conf.d 中,应用直接 `-lEGL -lGLESv2` 即可
