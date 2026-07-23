@@ -77,7 +77,7 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 
 ## rootfs
 
-- **NVR 板(nvr-ddr3)**:Debian 12 bookworm **headless**(glibc 2.36),`debian/mk-rootfs-bookworm.sh` debootstrap 直建,含 mpp/rga/rknpu2(rknn_server 默认不启用)/libmali-g13p0-gbm/WiFi·BT 固件;开发期账号 root/root(量产前必须改)
+- **NVR 板(nvr-ddr3)**:Debian 12 bookworm **headless**(glibc 2.36),`debian/mk-rootfs-bookworm.sh` debootstrap 直建,含 mpp/rga/rknpu2(rknn_server 默认不启用)、libmali-g24p0-x11-wayland-gbm、gst 1.22+rkmpp 插件;开发期账号 root/root(量产前必须改)
 - dragon 板仍为 Debian 11 桌面版(linaro 基底流程,未动)
 - 基底缓存 `debian/bookworm-base-arm64.tar.gz`,删掉会重新 debootstrap
 - recovery:`./docker/run.sh ./build.sh recovery` 已在容器内打通(容器重编 output,含 6.1 内核);
