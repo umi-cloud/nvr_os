@@ -47,6 +47,13 @@ Rockchip RK3566 Linux SDK,双内核并存:
 **本板无 WiFi/BT/vfd 硬件**(dts 已禁用相关节点,内核裁剪 WLAN/BT 协议栈,rootfs 无相关组件)。
 dragon 板(5.10)保留全部原配置。
 
+电源方案:无 I2C PMIC(i2c0 禁用是刻意的)——vdd_cpu/vdd_logic 为 PWM 调压 DC-DC
+(800-1200mV,DVFS 有效),其余固定 LDO。
+**本版无 RTC**(⚠ 下一版硬件需补 RTC 芯片):软件缓解 = fake-hwclock(开机恢复+
+每小时落盘,断电最多丢 1 小时)+ systemd-timesyncd NTP 校准。
+TF 卡槽存在,sdmmc0 保持启用(dwmmc "No normal pinctrl" 告警无害)。
+看门狗 /dev/watchdog0 可用,**nvr-edge 需实现喂狗**。
+
 已完成:librknnrt 2.3.2(配 rknpu 0.9.8);首块板整机点亮验证(eMMC/网口/加速全家/分区自适应);
 开机 logo 全程无缝(u-boot drm-logo 预留页对齐补丁 + 360px um 标志);
 DDR 动态调频(opp 适配 DDR3 频点 + 使能 dfi + auto-freq-en=1,空闲 324MHz↔负载 1056MHz 实测闭环;
