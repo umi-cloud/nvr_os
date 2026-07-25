@@ -27,7 +27,7 @@ RUN curl -fsSL -o /tmp/debootstrap.deb http://deb.debian.org/debian/pool/main/d/
 
 # buildroot(recovery 等)额外依赖,独立一层避免重建主依赖层
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    patch perl less \
+    patch perl less dpkg-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 非交互构建:禁用分页器(repo/git 在 tty 下会调 less 挂起构建)
