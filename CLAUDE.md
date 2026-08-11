@@ -90,8 +90,13 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 ## rootfs
 
 - **NVR 板(nvr-ddr3)**:Debian 12 bookworm **headless**(glibc 2.36),`debian/mk-rootfs-bookworm.sh` debootstrap 直建,含 mpp/rga/rknpu2(rknn_server 默认启用,连板调试即插即用)、libmali-g24p0-x11-wayland-gbm、gst 1.22+rkmpp 插件
-- **量产前必改**:开发期账号 root/root + PermitRootLogin;ssh host key 是构建时打进镜像的,
-  全部设备共用同一把,量产前需加首启重新生成(开发期共用反而方便,故未做)
+- **ssh 仅密钥登录**:公钥来自 `debian/authorized_keys`(入库,追加一行即多一把),
+  装到 `/root/.ssh/` 后由 `sshd_config.d/10-nvr.conf` 关掉密码认证。用 drop-in 是因为
+  主文件第 12 行的 `Include` 在设置之前,sshd 取先出现的值。构建时若无该文件则自动
+  保持密码登录(没公钥还禁密码 = 造出登不上的机器)。root 密码仍是 root/root,
+  但**只对串口 console 有效**,是密钥丢失时的唯一后路
+- **量产前必改**:ssh host key 是构建时打进镜像的,全部设备共用同一把,
+  量产前需加首启重新生成(开发期共用反而方便,故未做)
 - dragon 板仍为 Debian 11 桌面版(linaro 基底流程,未动)
 - **命名陷阱(勿按名字误删)**:`debian/linaro-rootfs.img` 沿用 linaro 时代命名,内容实为 **bookworm**,
   是 `rockdev/rootfs.img` 的真正来源(`mk-image.sh` 硬编码此输出名);`debian/binary/` 是
