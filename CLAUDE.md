@@ -109,6 +109,31 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - recovery:`./docker/run.sh ./build.sh recovery` 已在容器内打通(容器重编 output,含 6.1 内核);
   前人旧产物已清理,注意新 recovery 尚未上板验证
 
+### 应用层组件(overlay-nvr)
+
+两个组件随镜像出厂,unit 与启动脚本都在 `debian/overlay-nvr/`:
+
+| 组件 | 基线(rootfs) | 运行体 | 数据/部署 |
+|---|---|---|---|
+| nvr-edge | `/usr/local/lib/nvr/nvr-edge` | 自更新双槽 `data/selfupdate/nvr-edge/current` | work-dir `/userdata/nvr` |
+| vsync | `/usr/local/lib/vsync/vsync` | `/userdata/vsync/vsync`(首启从基线复制) | work-dir `/userdata/vsync`,部署目录 `/vcache` |
+
+- 两者的运行体都不在 rootfs:**nvr-edge** 靠引导器 `/usr/local/bin/nvr` 选双槽、基线兜底;
+  **vsync** 的自更新是就地覆盖自己(同目录写 `.new`/`.backup`),没有槽,故运行体必须
+  复制到可写的 userdata —— 跑 rootfs 里那份会被 `ProtectSystem=full` 的只读 `/usr` 挡死
+- **启动参数一律由启动脚本组装,不写进 unit**:systemd 对不带引号的 `${VAR}` 做 word
+  splitting,空值会让整个参数消失,后一个开关被当成前一个的值(Go flag 不报错,静默取错)
+- 设备 SN 两者都从 `/proc/device-tree/serial-number` 动态取(vsync 自带的
+  getprop/unifykeys/getsn 在 RK3566+Debian 全不匹配);渠道/agent id 均为 102
+- unit 的 `RequiresMountsFor` 必须列全用到的分区,且 `WorkingDirectory` 要加 `-` 前缀:
+  首启 userdata 刚格式化,目录不存在会在 exec 前 chdir 失败(`200/CHDIR`)导致崩溃循环,
+  `ExecStartPre` 同样受其约束救不了;目录由启动脚本 mkdir(那时分区已挂载,不会落在
+  被盖住的 rootfs 上)
+- MQTT 的 CA 证书随镜像出厂在 `/etc/nvr/certs/ca-cert.pem`。nvr-edge 内嵌了同一份并会
+  尝试自写,但 `ProtectSystem=full` 下 `/etc` 只读必然失败,故必须预置
+  (当前是 `CN=MyTestCA` 测试证书,量产前替换;要 mTLS 再加 `client.crt`/`client.key`)
+- **vsync 是 32 位 ARM 二进制**,依赖内核 `CONFIG_COMPAT=y`(已开)——裁剪内核时勿关
+
 ## 板级配置
 
 - 选板:`./build.sh lunch`,配置文件在 `device/rockchip/rk356x/BoardConfig-*.mk`,选中后软链到 `device/rockchip/.BoardConfig.mk`
