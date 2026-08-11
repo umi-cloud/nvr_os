@@ -117,6 +117,12 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   - `BoardConfig-rk3566-evb2-lp4x-v10.mk`:前人定制的机顶盒板("dragon"),5.10 内核,DTS `rk3566-box-demo-v10_rtl8211f`(另有 `_ip1001` PHY 变体)
   - `BoardConfig-rk3566-nvr-ddr3-v1.0.mk`:NVR 无 SATA 板(硬件同为 V1.0,旧命名 v10 已统一为 v1.0),8颗 8bit DDR3,**kernel-6.1** + DTS `rk3566-nvr-ddr3-v1.0`(override 风格,基于官方 box-demo dtsi,含电源域 1.8V/RGMII 时延等实板参数)+ defconfig 片段 `nvr.config`
   - `BoardConfig-rk3566-nvr-ddr3-sata-v1.0.mk`:NVR SATA 板(原理图 UMI-NVR-RK3566-V1.0),DTS `rk3566-nvr-ddr3-sata-v1.0` include 无 SATA 板 dts 只维护差异:SATA 硬盘位(sata2/combphy2,combphy1 保留 USB3 host)、RK809-5 PMIC(box.dtsi 占位 regulator 删除后按原 label 重建,vdd_cpu 仍 PWM 调压)、HYM8563 RTC、RK809 codec 声卡;内核配置与无 SATA 板完全一致
+- ⚠ **两块板的固件不通用,烧前先确认 `.BoardConfig.mk` 软链指向哪块**。SATA 板 dts 会
+  `/delete-node/` 掉 `vcc_1v8`/`vcc_3v3` 等固定 regulator,改由 i2c0 上的 RK809 提供;
+  这份固件烧到无 SATA 板上,PMIC 不存在 → regulator 全缺 → `pmu_io_domains` 配不起来 →
+  **网口不通、拿不到 IP**(实际踩过)。反向(无 SATA 固件烧 SATA 板)则丢 SATA 盘与 RTC。
+  换板后必须重编内核:`./docker/run.sh ./build.sh kernel` 再 mkfirmware/updateimg;
+  rootfs 两块板共用,不必重建。快速自检:反编译 dtb 看 `rk809` 节点数,无 SATA 板应为 0
 - DDR 类型由 rkbin 闭源 blob 自动识别(DDR3/DDR4/LP4X 同一 blob),换内存不改源码;调参用 `rkbin/tools/ddrbin_tool`
 
 ## git 仓库结构(重要)
