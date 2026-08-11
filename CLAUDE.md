@@ -1,4 +1,4 @@
-# nvr_os — RK3566 Linux SDK
+# nvr-os — RK3566 Linux SDK
 
 Rockchip RK3566 Linux SDK,双内核并存:
 - `kernel/`:5.10.110(基线 `linux-5.10-gen-rkr3.3`,官方 Gerrit 同步,本机无账号)
@@ -47,10 +47,11 @@ Rockchip RK3566 Linux SDK,双内核并存:
 **本板无 WiFi/BT/vfd 硬件**(dts 已禁用相关节点,内核裁剪 WLAN/BT 协议栈,rootfs 无相关组件)。
 dragon 板(5.10)保留全部原配置。
 
-电源方案:无 I2C PMIC(i2c0 禁用是刻意的)——vdd_cpu/vdd_logic 为 PWM 调压 DC-DC
-(800-1200mV,DVFS 有效),其余固定 LDO。
-**本版无 RTC**(⚠ 下一版硬件需补 RTC 芯片):软件缓解 = fake-hwclock(开机恢复+
-每小时落盘,断电最多丢 1 小时)+ systemd-timesyncd NTP 校准。
+电源方案(无 SATA 板):无 I2C PMIC(i2c0 禁用是刻意的)——vdd_cpu/vdd_logic 为 PWM 调压 DC-DC
+(800-1200mV,DVFS 有效),其余固定 LDO;SATA 板改用 RK809-5(vdd_cpu 仍 PWM 调压)。
+RTC:无 SATA 板无 RTC,靠 systemd-timesyncd clock file(每分钟落盘)恢复时间;
+SATA 板有 HYM8563(i2c1@0x51,CR1220 备电,alias 固定 rtc0,内核 hctosys 开机恢复)。
+fake-hwclock 已从 rootfs 裁掉。
 TF 卡槽存在,sdmmc0 保持启用(dwmmc "No normal pinctrl" 告警无害)。
 看门狗 /dev/watchdog0 可用,**nvr-edge 需实现喂狗**。
 
@@ -92,6 +93,12 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - **量产前必改**:开发期账号 root/root + PermitRootLogin;ssh host key 是构建时打进镜像的,
   全部设备共用同一把,量产前需加首启重新生成(开发期共用反而方便,故未做)
 - dragon 板仍为 Debian 11 桌面版(linaro 基底流程,未动)
+- **命名陷阱(勿按名字误删)**:`debian/linaro-rootfs.img` 沿用 linaro 时代命名,内容实为 **bookworm**,
+  是 `rockdev/rootfs.img` 的真正来源(`mk-image.sh` 硬编码此输出名);`debian/binary/` 是
+  bookworm 脚本的 `TARGET_ROOTFS_DIR`,非 bullseye 残留。`overlay/`、`overlay-firmware/`、
+  `overlay-debug/` 两套 rootfs 共用。真正只属 bullseye 的是 `linaro-bullseye-alip-*.tar.gz`、
+  `mk-rootfs-bullseye.sh`、`mk-base-debian.sh`、`mk-iso-debian.sh`、`ubuntu-build-service/`;
+  `overlay_LM/` 全项目零引用,`packages/armhf/` 仅 32 位板用
 - 基底缓存 `debian/bookworm-base-arm64.tar.gz`,删掉会重新 debootstrap;**不入库**(~130M),
   新机器首次构建需联网跑一次 debootstrap,之后装包全走本地 apt 镜像
 - recovery:`./docker/run.sh ./build.sh recovery` 已在容器内打通(容器重编 output,含 6.1 内核);
@@ -103,7 +110,8 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - 区分逻辑:芯片级(`RK_UBOOT_DEFCONFIG`、rkbin loader)/ 板级(`RK_KERNEL_DIR` 选内核树 + `RK_KERNEL_DTS`,核心)/ 系统级(rootfs、分区表 parameter)
 - 现有板子:
   - `BoardConfig-rk3566-evb2-lp4x-v10.mk`:前人定制的机顶盒板("dragon"),5.10 内核,DTS `rk3566-box-demo-v10_rtl8211f`(另有 `_ip1001` PHY 变体)
-  - `BoardConfig-rk3566-nvr-ddr3-v10.mk`:NVR 板,8颗 8bit DDR3,**kernel-6.1** + DTS `rk3566-nvr-ddr3-v10`(override 风格,基于官方 box-demo dtsi,含电源域 1.8V/RGMII 时延等实板参数)+ defconfig 片段 `nvr.config`
+  - `BoardConfig-rk3566-nvr-ddr3-v1.0.mk`:NVR 无 SATA 板(硬件同为 V1.0,旧命名 v10 已统一为 v1.0),8颗 8bit DDR3,**kernel-6.1** + DTS `rk3566-nvr-ddr3-v1.0`(override 风格,基于官方 box-demo dtsi,含电源域 1.8V/RGMII 时延等实板参数)+ defconfig 片段 `nvr.config`
+  - `BoardConfig-rk3566-nvr-ddr3-sata-v1.0.mk`:NVR SATA 板(原理图 UMI-NVR-RK3566-V1.0),DTS `rk3566-nvr-ddr3-sata-v1.0` include 无 SATA 板 dts 只维护差异:SATA 硬盘位(sata2/combphy2,combphy1 保留 USB3 host)、RK809-5 PMIC(box.dtsi 占位 regulator 删除后按原 label 重建,vdd_cpu 仍 PWM 调压)、HYM8563 RTC、RK809 codec 声卡;内核配置与无 SATA 板完全一致
 - DDR 类型由 rkbin 闭源 blob 自动识别(DDR3/DDR4/LP4X 同一 blob),换内存不改源码;调参用 `rkbin/tools/ddrbin_tool`
 
 ## git 仓库结构(重要)
@@ -115,10 +123,19 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - 与官方基线对比:`git -C kernel diff linux-5.10-gen-rkr3.3 nvr-custom`;6.1 用 `git -C kernel-6.1 diff origin/rk-6.1-rkr6.1 nvr-custom`
 - 不入库:`buildroot/output/`(50G 构建产物)、`buildroot/dl/`、`rockdev/`、`.repo/`
 - 子仓库远程指向 Rockchip Gerrit,不可推送
+- **`kernel/`(5.10)只有 dragon 板在用**(该板 BoardConfig 未设 `RK_KERNEL_DIR`,吃默认值),
+  其 `nvr-custom` 相对基线仅 2 个提交且**本地是唯一副本**。删 `.repo/project-objects/rk/kernel.git`
+  (2.2G)后无账号拉不回来 → 不可逆。若要清理,先 `git -C kernel bundle create` 备份;
+  只想省空间则 `make mrproper`(约 2G,可逆)
 
-## 分区(NVR 板,parameter-nvr.txt)
+## 分区(NVR 两块板共用 parameter-nvr.txt)
 
-uboot 4M / misc 4M / **boot 128M** / recovery 64M / **rootfs 4G** / **userdata 6G** / **vcache:grow**(64G/128G eMMC 通用)。
+uboot 4M / misc 4M / **boot 128M** / recovery 64M / **rootfs 3G** / **userdata 8G** / **vcache:grow**。
+无 SATA 板与 SATA 板共用同一张表,改一处两块板同时生效(vcache:grow 自适应不同 eMMC 容量)。
+实测样机 eMMC 为 **32G**(29.12 GiB 可用),vcache 实得 17.9G;换 64G/128G eMMC 只有 vcache 变大。
+容量依据(实测):rootfs 出厂占用约 1.1G(/usr 1.1G 是大头,含 libmali/WPE/ffmpeg/思源黑体),
+3G 留 1.9G 给日志、apt 缓存与后续升级;userdata 现用不到 1G,8G 为应用数据预留。
+rootfs.img 本身只有 867M,按分区大小首启 `resize2fs` 扩展,改分区不必重建 rootfs。
 userdata、vcache 不烧镜像,首次开机由 `format-data-parts.service` 自动 mkfs 并按 PARTLABEL 挂载到 `/userdata`、`/vcache`。
 dragon 板仍用旧表 parameter-buildroot-fit.txt。改分区表必须整机重烧。
 
