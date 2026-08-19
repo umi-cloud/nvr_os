@@ -115,12 +115,23 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 
 | 组件 | 基线(rootfs) | 运行体 | 数据/部署 |
 |---|---|---|---|
-| nvr-edge | `/usr/local/lib/nvr/nvr-edge` | 自更新双槽 `data/selfupdate/nvr-edge/current` | work-dir `/userdata/nvr` |
+| nvr-edge | `/usr/local/lib/nvr/nvr-edge` | `/userdata/nvr/bin/nvr-edge`(首启从基线复制,之后由自更新从活动槽同步) | work-dir `/userdata/nvr`,双槽 `data/selfupdate/nvr-edge/` |
 | vsync | `/usr/local/lib/vsync/vsync` | `/userdata/vsync/vsync`(首启从基线复制) | work-dir `/userdata/vsync`,部署目录 `/vcache` |
 
-- 两者的运行体都不在 rootfs:**nvr-edge** 靠引导器 `/usr/local/bin/nvr` 选双槽、基线兜底;
-  **vsync** 的自更新是就地覆盖自己(同目录写 `.new`/`.backup`),没有槽,故运行体必须
-  复制到可写的 userdata —— 跑 rootfs 里那份会被 `ProtectSystem=full` 的只读 `/usr` 挡死
+- **两者的运行体都必须在可写的 userdata,跑 rootfs 里那份会被 `ProtectSystem=full` 的只读 `/usr` 挡死**,
+  但失败方式不同:
+  - **vsync** 的自更新是就地覆盖自己(同目录写 `.new`/`.backup`),没有槽,写不进去就更新不了
+  - **nvr-edge** 更隐蔽:它把自己的可执行文件路径当作"固定启动路径"
+    (`app.go` 的 `AgentInstallPath` 默认取 `os.Executable()`),切槽后要把活动槽二进制
+    复制回该路径(`updater.go` 的 `activate`)。这一步失败时 `Install()` **整体回滚** ——
+    切回旧 current、擦掉刚下好的新槽。下载、sha256、健康自检全过,只在最后一步倒回,
+    日志看着像更新完了。若从 `/usr` 里的基线启动,**裸机首次 OTA 必然失败且永远卡在出厂版本**
+- 故引导器 `/usr/local/bin/nvr` 不做"槽优先"选择,只保证 `/userdata/nvr/bin/nvr-edge` 上
+  有个能跑的二进制(缺失/0 字节才从基线补),哪个槽活动由 `state.json` 说了算:
+  启动时 `RecoverBoot` 会 `activate` 一次把活动槽同步过来并请求重启,自愈。
+  `ConfirmBootFrom` 按**内容 sha256** 而非路径比对,故固定路径与槽是副本关系不影响 trial 确认
+  (真机实测:换成固定路径启动后,首次启动日志出现一次
+  `固定启动程序与活动槽不一致,已修复并请求重启` + 一次 ConfirmBoot WARN,重启后即收敛)
 - **启动参数一律由启动脚本组装,不写进 unit**:systemd 对不带引号的 `${VAR}` 做 word
   splitting,空值会让整个参数消失,后一个开关被当成前一个的值(Go flag 不报错,静默取错)
 - 设备 SN 两者都从 `/proc/device-tree/serial-number` 动态取(vsync 自带的
