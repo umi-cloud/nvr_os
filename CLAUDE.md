@@ -49,6 +49,9 @@ dragon 板(5.10)保留全部原配置。
 
 电源方案(无 SATA 板):无 I2C PMIC(i2c0 禁用是刻意的)——vdd_cpu/vdd_logic 为 PWM 调压 DC-DC
 (800-1200mV,DVFS 有效),其余固定 LDO;SATA 板改用 RK809-5(vdd_cpu 仍 PWM 调压)。
+NTP 源钉阿里云(`/etc/systemd/timesyncd.conf.d/10-nvr.conf`:`ntp.aliyun.com ntp1.aliyun.com`,
+cn.pool 兜底)——Debian 默认池会先连试境外 IPv6 地址超时数轮,无 RTC 的板子这段时间只能用旧时间。
+注意 ntp2~ntp7.aliyun.com 与 ntp.aliyun.com 是同一个 anycast 地址,列多个不增加冗余。
 RTC:无 SATA 板无 RTC,靠 systemd-timesyncd clock file(每分钟落盘)恢复时间;
 SATA 板有 HYM8563(i2c1@0x51,CR1220 备电,alias 固定 rtc0,内核 hctosys 开机恢复)。
 fake-hwclock 已从 rootfs 裁掉。
