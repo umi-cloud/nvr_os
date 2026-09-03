@@ -53,8 +53,14 @@ NTP 源钉阿里云(`/etc/systemd/timesyncd.conf.d/10-nvr.conf`:`ntp.aliyun.com 
 cn.pool 兜底)——Debian 默认池会先连试境外 IPv6 地址超时数轮,无 RTC 的板子这段时间只能用旧时间。
 注意 ntp2~ntp7.aliyun.com 与 ntp.aliyun.com 是同一个 anycast 地址,列多个不增加冗余。
 RTC:无 SATA 板无 RTC,靠 systemd-timesyncd clock file(每分钟落盘)恢复时间;
-SATA 板有 HYM8563(i2c1@0x51,CR1220 备电,alias 固定 rtc0,内核 hctosys 开机恢复)。
-fake-hwclock 已从 rootfs 裁掉。
+SATA 板**用 RK809 内置 RTC**(rk808-rtc = rtc0,内核 hctosys/systohc 直接读写)。板上的 HYM8563
+(i2c1@0x51)节点保留但 disabled:两颗同时注册时 RK809 作为 MFD 子设备先抢 rtc0,
+`aliases { rtc0 = &hym8563 }` 无效(内核报 `/aliases ID 0 not available`)。要换回 HYM8563 须同时关
+`CONFIG_RTC_DRV_RK808`。fake-hwclock 已从 rootfs 裁掉。
+**DDR 调频(dmc)按板区分**:无 SATA 板开 auto-freq(324↔1056);**SATA 板 dmc 关闭、定频 1056**——
+该板开调频后随机 Oops(非法指令/PID 1 段错误),panic 时 cur_freq 均为 324MHz,loader 降 780 无改善,
+关 dmc 后 4 核+硬编压力与 memtester 1GB 全过。两板差异:无 SATA 板 dmc 的 center-supply 是 950mV 固定
+`vdd_fixed`(调频不动电压),SATA 板是 RK809 `vdd_logic` 900mV(真调压)。恢复调频的路径写在 SATA dts 注释里。
 TF 卡槽存在,sdmmc0 保持启用(dwmmc "No normal pinctrl" 告警无害)。
 看门狗 /dev/watchdog0 可用,**nvr-edge 需实现喂狗**。
 
@@ -98,6 +104,18 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   主文件第 12 行的 `Include` 在设置之前,sshd 取先出现的值。构建时若无该文件则自动
   保持密码登录(没公钥还禁密码 = 造出登不上的机器)。root 密码仍是 root/root,
   但**只对串口 console 有效**,是密钥丢失时的唯一后路
+- **串口控制台**:`serial-getty@ttyFIQ0` 已启用,root/root 密码登录(Rockchip overlay 原来写死
+  `--autologin root` 免密进 shell,构建脚本已 sed 掉)。`systemctl reboot loader` 可远程进烧写模式,
+  不用按 recovery 键
+- **设备身份(vendor storage,eMMC 末尾厂商区)**:`nvr-provision <SN> <MAC1> <MAC2>` 写入,`show` 回读。
+  SN 16 位、`UMNVR3566` 开头;u-boot 下次启动把 SN 注入 `/serial-number`(nvr-edge/vsync 的设备 SN),
+  MAC1 注入 gmac1(dts 别名 `ethernet0`,因此网口名是 **end0**),MAC2 由 udev 打标签拉起
+  `nvr-usb-eth-mac@eth1.service` 套到 USB 网口(r8152 无 EEPROM、开机随机)。工具是官方
+  `external/rktoolkit/vendor_storage.c`,构建期交叉编译进 `/usr/local/sbin`。**upgrade_tool 只能写 SN 不能写 MAC**
+- **主机名** `UMI-<SN 后 6 位>`(`nvr-hostname.service` 每次开机幂等):两块板同名时路由器按主机名派同一 IP
+- **两个网口都走 DHCP**(`10-lan.network` 匹配 `en* eth*`);只写 `en*` 会把 USB 口漏掉,线插那边就没网
+- **网口灯**:RTL8211F LCR 由 PHY 节点 `realtek,led-lcr` 指定(stmmac 的 led_fixup 原来写死 0xc160),
+  NVR 板取 0xc20b(LED0 常亮 link,LED1/LED2 收发闪烁),两颗灯都闪、没有常亮则改回 0xc160
 - **量产前必改**:ssh host key 是构建时打进镜像的,全部设备共用同一把,
   量产前需加首启重新生成(开发期共用反而方便,故未做)
 - dragon 板仍为 Debian 11 桌面版(linaro 基底流程,未动)
@@ -161,7 +179,8 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   这份固件烧到无 SATA 板上,PMIC 不存在 → regulator 全缺 → `pmu_io_domains` 配不起来 →
   **网口不通、拿不到 IP**(实际踩过)。反向(无 SATA 固件烧 SATA 板)则丢 SATA 盘与 RTC。
   换板后必须重编内核:`./docker/run.sh ./build.sh kernel` 再 mkfirmware/updateimg;
-  rootfs 两块板共用,不必重建。快速自检:反编译 dtb 看 `rk809` 节点数,无 SATA 板应为 0
+  rootfs 两块板共用,不必重建。快速自检:反编译 dtb 看 `rk809` 节点数,无 SATA 板应为 0。
+  两块板的 dts 与 BoardConfig 直到 2026-09 才补入库(此前只有旧名 v10 在库里),改完记得 `git status`
 - DDR 类型由 rkbin 闭源 blob 自动识别(DDR3/DDR4/LP4X 同一 blob),换内存不改源码;调参用 `rkbin/tools/ddrbin_tool`
 
 ## git 仓库结构(重要)
