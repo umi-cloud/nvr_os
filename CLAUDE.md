@@ -216,8 +216,9 @@ uboot 4M / misc 4M / **boot 128M** / recovery 64M / **rootfs 5G** / **userdata 1
 实测样机 eMMC 为 **32G**(29.12 GiB 可用),vcache 实得 13.9G;换 64G/128G eMMC 只有 vcache 变大。
 容量依据(实测):rootfs 出厂占用约 1.1G(/usr 1.1G 是大头,含 libmali/WPE/ffmpeg/思源黑体),
 5G 余量充足;userdata 现用不到 1G,10G 为应用数据(模型、录像索引等)预留。
-rootfs.img 本身只有 867M,按分区大小首启 `resize2fs` 扩展,改分区不必重建 rootfs。
-userdata、vcache 不烧镜像,首次开机由 `format-data-parts.service` 自动 mkfs 并按 PARTLABEL 挂载到 `/userdata`、`/vcache`。
+rootfs.img 本身只有 867M,fstab 的 `x-systemd.growfs` 每次开机在线扩到分区大小(已满时毫秒级空操作),
+改分区不必重建 rootfs。userdata、vcache 不烧镜像,fstab 的 `x-systemd.makefs` 在分区无文件系统时自动
+mkfs.ext4,按 PARTLABEL 挂到 `/userdata`、`/vcache`。(原自写的 format-data-parts 脚本已删除)
 dragon 板仍用旧表 parameter-buildroot-fit.txt。改分区表必须整机重烧。
 
 注意:若 mkfirmware 在 envsetup 阶段报错退出(buildroot output 配置路径不一致),
