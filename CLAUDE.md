@@ -124,8 +124,11 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - **两个网口都走 DHCP**(`10-lan.network` 匹配 `en* eth*`);只写 `en*` 会把 USB 口漏掉,线插那边就没网
 - **网口灯**:RTL8211F LCR 由 PHY 节点 `realtek,led-lcr` 指定(stmmac 的 led_fixup 原来写死 0xc160),
   NVR 板取 0xc20b(LED0 常亮 link,LED1/LED2 收发闪烁),两颗灯都闪、没有常亮则改回 0xc160
-- **量产前必改**:ssh host key 是构建时打进镜像的,全部设备共用同一把,
-  量产前需加首启重新生成(开发期共用反而方便,故未做)
+- **ssh host key 首启生成**:镜像不带 host key,`nvr-ssh-hostkeys.service` 首启 `ssh-keygen -A`,每台设备
+  各不相同。代价是每刷一次固件 known_hosts 都会报 key 变化,开发期用 `-o StrictHostKeyChecking=no` 即可
+- **系统自愈与收敛**(overlay-nvr/etc/systemd):PID 1 喂硬件看门狗(`RuntimeWatchdogSec=30s`,内核或
+  PID 1 卡死 30 秒自动复位;nvr-edge 自己的喂狗仍待做);journald 封顶 64M;apt-daily/e2scrub/dpkg-db-backup
+  定时器已 mask,adbd 已关(USB 是 host 模式);根分区 noatime。板上常驻服务 13 个,启动 8 秒
 - dragon 板仍为 Debian 11 桌面版(linaro 基底流程,未动)
 - **命名陷阱(勿按名字误删)**:`debian/linaro-rootfs.img` 沿用 linaro 时代命名,内容实为 **bookworm**,
   是 `rockdev/rootfs.img` 的真正来源(`mk-image.sh` 硬编码此输出名);`debian/binary/` 是
