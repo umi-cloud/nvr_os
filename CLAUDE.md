@@ -117,8 +117,9 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   不用按 recovery 键
 - **设备身份(vendor storage,eMMC 末尾厂商区)**:`nvr-provision <SN> <MAC1> <MAC2>` 写入,`show` 回读。
   SN 16 位、`UMNVR3566` 开头;u-boot 下次启动把 SN 注入 `/serial-number`(nvr-edge/vsync 的设备 SN),
-  MAC1 注入 gmac1(dts 别名 `ethernet0`,因此网口名是 **end0**),MAC2 由 udev 打标签拉起
-  `nvr-usb-eth-mac@eth1.service` 套到 USB 网口(r8152 无 EEPROM、开机随机)。工具是官方
+  MAC1 注入 gmac1(dts 别名 `ethernet0`,因此网口名是 **end0**);MAC2 预留给 USB 网口但**默认不套**:
+  r8152 无 EEPROM 开机随机 MAC,实测开机早期改它的 MAC 会间歇性 Tx timeout 卡死并冻结整机网络
+  (rtnl 锁),4 次开机 2 次复现,udev 规则里那行已注释。工具是官方
   `external/rktoolkit/vendor_storage.c`,构建期交叉编译进 `/usr/local/sbin`。**upgrade_tool 只能写 SN 不能写 MAC**
 - **主机名** `UMI-<SN 后 6 位>`(`nvr-hostname.service` 每次开机幂等):两块板同名时路由器按主机名派同一 IP
 - **两个网口都走 DHCP**(`10-lan.network` 匹配 `en* eth*`);只写 `en*` 会把 USB 口漏掉,线插那边就没网
