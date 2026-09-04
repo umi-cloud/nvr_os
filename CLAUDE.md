@@ -29,6 +29,10 @@ Rockchip RK3566 Linux SDK,双内核并存:
 
 ## 视频编解码(MPP + GStreamer)
 
+- 组件版本(2026-09):**mpp 1.1.0**(`1:1.1.0-1`)、**librga 1.10.6**(`1:1.10.6-1`,上游只发预编译库,
+  自写 debian/ 打包)、gst-rockchip 插件 1.14-5(2022 源码对新库重链)。重打 deb 的配方见
+  `debian/pkgbuild/README.md`(bookworm arm64 chroot,mpp → librga → gst 顺序)。
+  NPU:rknpu 驱动 0.9.8 + librknnrt 2.3.2 已是上游最新;Mali kbase g25p0 不能单独升(g29p1 无配套 libmali)
 - rootfs 内置 gst 1.22(tools/base/good)+ `gstreamer1.0-rockchip1` 插件:`mppvideodec` / `mpph264enc` /
   `mpph265enc` / `mppjpegdec|enc`,以及 kmssrc/rkximagesink;NVR 解码链示例:
   `rtspsrc ! rtph264depay ! h264parse ! mppvideodec ! kmssink`
