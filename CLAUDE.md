@@ -30,8 +30,12 @@ Rockchip RK3566 Linux SDK,双内核并存:
 ## 视频编解码(MPP + GStreamer)
 
 - 组件版本(2026-09):**mpp 1.1.0**(`1:1.1.0-1`)、**librga 1.10.6**(`1:1.10.6-1`,上游只发预编译库,
-  自写 debian/ 打包)、gst-rockchip 插件 1.14-5(2022 源码对新库重链)。重打 deb 的配方见
-  `debian/pkgbuild/README.md`(bookworm arm64 chroot,mpp → librga → gst 顺序)。
+  自写 debian/ 打包)、gst-rockchip 插件**保持 1.14-4 旧二进制**——同一份源码对 mpp 1.1.0 头文件重编后
+  1080p I420 走 RGA 转换必失败(内核报 job_commit failed),旧二进制配新库反而正常,四种组合交叉验证过。
+  重打 deb 的配方与这个坑见 `debian/pkgbuild/README.md`。
+  验证基准(SATA 板,mpp 1.1.0):`mpi_enc_test` 720p H264/H265 报 87/84 fps(**旧 mpp 1.5.0 同一命令也是 87**,
+  下面那条 285fps 是早期不同测法的数字,不要拿来对比),`mpi_dec_test` 720p H264 800+fps、H265 1270fps,
+  gst 1080p I420 编→解闭环通过、RGA 0 报错。
   NPU:rknpu 驱动 0.9.8 + librknnrt 2.3.2 已是上游最新;Mali kbase g25p0 不能单独升(g29p1 无配套 libmali)
 - rootfs 内置 gst 1.22(tools/base/good)+ `gstreamer1.0-rockchip1` 插件:`mppvideodec` / `mpph264enc` /
   `mpph265enc` / `mppjpegdec|enc`,以及 kmssrc/rkximagesink;NVR 解码链示例:
