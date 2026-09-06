@@ -117,12 +117,16 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   不用按 recovery 键
 - **设备身份(vendor storage,eMMC 末尾厂商区)**:`nvr-provision <SN> <MAC1> <MAC2>` 写入,`show` 回读。
   SN 16 位、`UMNVR3566` 开头;u-boot 下次启动把 SN 注入 `/serial-number`(nvr-edge/vsync 的设备 SN),
-  MAC1 注入 gmac1(dts 别名 `ethernet0`,因此网口名是 **end0**);MAC2 预留给 USB 网口但**默认不套**:
-  r8152 无 EEPROM 开机随机 MAC,实测开机早期改它的 MAC 会间歇性 Tx timeout 卡死并冻结整机网络
-  (rtnl 锁),4 次开机 2 次复现,udev 规则里那行已注释。工具是官方
+  MAC1 注入 gmac1(dts 别名 `ethernet0`,因此网口名是 **end0**);MAC2 给 USB 网口(r8152 无 EEPROM,
+  开机随机):`nvr-usb-eth-link` 按 vendor 区生成 `/etc/systemd/network/20-usb-eth.link`,由 udev 在网卡
+  出现、尚未 UP 时套上,**写文件后下次开机生效**。不要在运行中改 r8152 的 MAC(曾间歇性 Tx timeout
+  卡死并冻结整机网络)。Debian 的 `73-usb-net-by-mac.link` 会抢先匹配 USB 网卡、盖掉 persistent 策略,
+  这就是它原来每次开机 MAC 都变的原因。工具是官方
   `external/rktoolkit/vendor_storage.c`,构建期交叉编译进 `/usr/local/sbin`。**upgrade_tool 只能写 SN 不能写 MAC**
 - **主机名** `UMI-<SN 后 6 位>`(`nvr-hostname.service` 每次开机幂等):两块板同名时路由器按主机名派同一 IP
-- **两个网口都走 DHCP**(`10-lan.network` 匹配 `en* eth*`);只写 `en*` 会把 USB 口漏掉,线插那边就没网
+- **两个网口都走 DHCP,千兆 end0 优先**(`10-lan.network` metric 100,`20-usb-eth.network` metric 2000):
+  两口同网段时内核只看 metric,相同会把 RTSP 和默认出口压到 100M 的 RTL8152 上(实测踩过);
+  只写 `en*` 会把 USB 口漏掉,线插那边就没网
 - **网口灯**:RTL8211F LCR 由 PHY 节点 `realtek,led-lcr` 指定(stmmac 的 led_fixup 原来写死 0xc160),
   NVR 板取 0xc20b(LED0 常亮 link,LED1/LED2 收发闪烁),两颗灯都闪、没有常亮则改回 0xc160
 - **ssh host key 首启生成**:镜像不带 host key,`nvr-ssh-hostkeys.service` 首启 `ssh-keygen -A`,每台设备
