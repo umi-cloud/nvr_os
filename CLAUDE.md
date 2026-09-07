@@ -41,7 +41,7 @@ Rockchip RK3566 Linux SDK,双内核并存:
   `mpph265enc` / `mppjpegdec|enc`,以及 kmssrc/rkximagesink;NVR 解码链示例:
   `rtspsrc ! rtph264depay ! h264parse ! mppvideodec ! kmssink`
 - **版本陷阱**:mpp/gst 插件的 deb 必须用 bookworm 构建(packages/arm64 已换)。
-  bullseye 旧构建版本号同为 1.5.0-1,但配 6.1 内核会在 MPP 层直接段错误
+  旧发行版构建版本号同为 1.5.0-1,但配 6.1 内核会在 MPP 层直接段错误
   (mpi_enc_test 都崩);版本号相同不代表构建相同,以实测为准
 - **勿装 gstreamer1.0-plugins-bad 元包**(依赖链拖入 LLVM/GTK/flite 约 300M):
   h264/h265parse 与 kmssink 由构建脚本从 bad 的 deb 中定向抽取
@@ -134,12 +134,10 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - **系统自愈与收敛**(overlay-nvr/etc/systemd):PID 1 喂硬件看门狗(`RuntimeWatchdogSec=30s`,内核或
   PID 1 卡死 30 秒自动复位;nvr-edge 自己的喂狗仍待做);journald 封顶 64M;apt-daily/e2scrub/dpkg-db-backup
   定时器已 mask,adbd 已关(USB 是 host 模式);根分区 noatime。板上常驻服务 13 个,启动 8 秒
-- dragon 板仍为 Debian 11 桌面版(linaro 基底流程,未动)
 - **命名陷阱(勿按名字误删)**:`debian/linaro-rootfs.img` 沿用 linaro 时代命名,内容实为 **bookworm**,
   是 `rockdev/rootfs.img` 的真正来源(`mk-image.sh` 硬编码此输出名);`debian/binary/` 是
-  bookworm 脚本的 `TARGET_ROOTFS_DIR`,非 bullseye 残留。`overlay/`、`overlay-firmware/`、
-  `overlay-debug/` 两套 rootfs 共用。真正只属 bullseye 的是 `linaro-bullseye-alip-*.tar.gz`、
-  `mk-rootfs-bullseye.sh`、`mk-base-debian.sh`、`mk-iso-debian.sh`、`ubuntu-build-service/`;
+  bookworm 脚本的 `TARGET_ROOTFS_DIR`。`overlay/`、`overlay-firmware/`、
+  `overlay-debug/` 为 SDK 板型共用资源，NVR 系统维护以 bookworm 构建链为准；
   `overlay_LM/` 全项目零引用,`packages/armhf/` 仅 32 位板用
 - 基底缓存 `debian/bookworm-base-arm64.tar.gz`,删掉会重新 debootstrap;**不入库**(~130M),
   新机器首次构建需联网跑一次 debootstrap,之后装包全走本地 apt 镜像
