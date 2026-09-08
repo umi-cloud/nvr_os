@@ -1,10 +1,12 @@
 # nvr-os — RK3566 Linux SDK
 
-Rockchip RK3566 Linux SDK,双内核并存:
-- `kernel/`:5.10.110(基线 `linux-5.10-gen-rkr3.3`,官方 Gerrit 同步,本机无账号)
-- `kernel-6.1/`:6.1(armbian 官方镜像 `rk-6.1-rkr6.1` = `linux-6.1-stan-rkr6.1`,无需账号)——**NVR 板当前使用**
+Rockchip RK3566 Linux SDK,单内核单 rootfs:
+- `kernel-6.1/`:6.1(armbian 官方镜像 `rk-6.1-rkr6.1` = `linux-6.1-stan-rkr6.1`,无需账号)
+- rootfs:Debian 12 bookworm headless
 
-内核目录由 BoardConfig 的 `RK_KERNEL_DIR` 选择(默认 `kernel`,dragon 板仍用 5.10)。
+由 BoardConfig 的 `RK_KERNEL_DIR=kernel-6.1` 指定。**5.10 内核与 bullseye/linaro 用户环境已于
+2026-09-08 下线**,同时删除的还有 dragon 板与四块 rk3568 EVB 板。归档见
+`/data/backup/nvr-os-legacy-20260908/`(kernel 与 rkwifibt 的完整 git bundle + README)。
 
 ## GPU(Mali-G52 Bifrost)
 
@@ -53,7 +55,6 @@ Rockchip RK3566 Linux SDK,双内核并存:
 ## 硬件说明
 
 **本板无 WiFi/BT/vfd 硬件**(dts 已禁用相关节点,内核裁剪 WLAN/BT 协议栈,rootfs 无相关组件)。
-dragon 板(5.10)保留全部原配置。
 
 电源方案(无 SATA 板):无 I2C PMIC(i2c0 禁用是刻意的)——vdd_cpu/vdd_logic 为 PWM 调压 DC-DC
 (800-1200mV,DVFS 有效),其余固定 LDO;SATA 板改用 RK809-5(vdd_cpu 仍 PWM 调压)。
@@ -137,8 +138,8 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - **命名陷阱(勿按名字误删)**:`debian/linaro-rootfs.img` 沿用 linaro 时代命名,内容实为 **bookworm**,
   是 `rockdev/rootfs.img` 的真正来源(`mk-image.sh` 硬编码此输出名);`debian/binary/` 是
   bookworm 脚本的 `TARGET_ROOTFS_DIR`。`overlay/`、`overlay-firmware/`、
-  `overlay-debug/` 为 SDK 板型共用资源，NVR 系统维护以 bookworm 构建链为准；
-  `overlay_LM/` 全项目零引用,`packages/armhf/` 仅 32 位板用
+  `overlay-debug/` 是 Rockchip 原始素材,bookworm 构建脚本按需取用后再裁剪
+  (如 overlay-firmware 是全量 linux-firmware,复制后只留 rockchip),**不要按名字误删**
 - 基底缓存 `debian/bookworm-base-arm64.tar.gz`,删掉会重新 debootstrap;**不入库**(~130M),
   新机器首次构建需联网跑一次 debootstrap,之后装包全走本地 apt 镜像
 - recovery:`./docker/run.sh ./build.sh recovery` 已在容器内打通(容器重编 output,含 6.1 内核);
@@ -184,8 +185,7 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 
 - 选板:`./build.sh lunch`,配置文件在 `device/rockchip/rk356x/BoardConfig-*.mk`,选中后软链到 `device/rockchip/.BoardConfig.mk`
 - 区分逻辑:芯片级(`RK_UBOOT_DEFCONFIG`、rkbin loader)/ 板级(`RK_KERNEL_DIR` 选内核树 + `RK_KERNEL_DTS`,核心)/ 系统级(rootfs、分区表 parameter)
-- 现有板子:
-  - `BoardConfig-rk3566-evb2-lp4x-v10.mk`:前人定制的机顶盒板("dragon"),5.10 内核,DTS `rk3566-box-demo-v10_rtl8211f`(另有 `_ip1001` PHY 变体)
+- 现有板子(**只剩两块**,`BoardConfig.mk` 默认项已改指 SATA 板):
   - `BoardConfig-rk3566-nvr-ddr3-v1.0.mk`:NVR 无 SATA 板(硬件同为 V1.0,旧命名 v10 已统一为 v1.0),8颗 8bit DDR3,**kernel-6.1** + DTS `rk3566-nvr-ddr3-v1.0`(override 风格,基于官方 box-demo dtsi,含电源域 1.8V/RGMII 时延等实板参数)+ defconfig 片段 `nvr.config`
   - `BoardConfig-rk3566-nvr-ddr3-sata-v1.0.mk`:NVR SATA 板(原理图 UMI-NVR-RK3566-V1.0),DTS `rk3566-nvr-ddr3-sata-v1.0` include 无 SATA 板 dts 只维护差异:SATA 硬盘位(sata2/combphy2,combphy1 保留 USB3 host)、RK809-5 PMIC(box.dtsi 占位 regulator 删除后按原 label 重建,vdd_cpu 仍 PWM 调压)、HYM8563 RTC、RK809 codec 声卡;内核配置与无 SATA 板完全一致
 - ⚠ **两块板的固件不通用,烧前先确认 `.BoardConfig.mk` 软链指向哪块**。SATA 板 dts 会
@@ -201,15 +201,14 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 
 - 本目录是 repo 工具管理的多仓库结构(`.repo/` + 各子仓库自带 `.git`)
 - **外层 `git add .` 不会收编子仓库内容**(只记 gitlink),勿直接全量提交
-- 所有定制改动已提交在各子仓库的 `nvr-custom` 分支(kernel、u-boot、buildroot、debian、device/rockchip、docs、tools、external/rkwifibt 等 10 个仓库);新改动继续提交到对应子仓库的 `nvr-custom`
+- 所有定制改动已提交在各子仓库的 `nvr-custom` 分支(u-boot、buildroot、debian、device/rockchip、docs、tools 等);新改动继续提交到对应子仓库的 `nvr-custom`
 - `kernel-6.1/` 不归 repo 工具管,是独立 git 克隆(remote 为 armbian/linux-rockchip,可拉取更新),定制同样在 `nvr-custom` 分支
-- 与官方基线对比:`git -C kernel diff linux-5.10-gen-rkr3.3 nvr-custom`;6.1 用 `git -C kernel-6.1 diff origin/rk-6.1-rkr6.1 nvr-custom`
+- 与官方基线对比:`git -C kernel-6.1 diff origin/rk-6.1-rkr6.1 nvr-custom`
 - 不入库:`buildroot/output/`(50G 构建产物)、`buildroot/dl/`、`rockdev/`、`.repo/`
 - 子仓库远程指向 Rockchip Gerrit,不可推送
-- **`kernel/`(5.10)只有 dragon 板在用**(该板 BoardConfig 未设 `RK_KERNEL_DIR`,吃默认值),
-  其 `nvr-custom` 相对基线仅 2 个提交且**本地是唯一副本**。删 `.repo/project-objects/rk/kernel.git`
-  (2.2G)后无账号拉不回来 → 不可逆。若要清理,先 `git -C kernel bundle create` 备份;
-  只想省空间则 `make mrproper`(约 2G,可逆)
+- **repo sync 已不可用**:5.10 内核及 libmali/rkwifibt/rkaiq/chromium/xserver 的
+  `.repo` 对象库随下线一并删除,而本机无 Gerrit 账号,manifest 里这些项目再也拉不回来。
+  需要它们时从 `/data/backup/nvr-os-legacy-20260908/` 的 bundle 还原,或从 Rockchip 官方重新获取
 
 ## 分区(NVR 两块板共用 parameter-nvr.txt)
 
@@ -221,7 +220,7 @@ uboot 4M / misc 4M / **boot 128M** / recovery 64M / **rootfs 5G** / **userdata 1
 rootfs.img 本身只有 867M,fstab 的 `x-systemd.growfs` 每次开机在线扩到分区大小(已满时毫秒级空操作),
 改分区不必重建 rootfs。userdata、vcache 不烧镜像,fstab 的 `x-systemd.makefs` 在分区无文件系统时自动
 mkfs.ext4,按 PARTLABEL 挂到 `/userdata`、`/vcache`。(原自写的 format-data-parts 脚本已删除)
-dragon 板仍用旧表 parameter-buildroot-fit.txt。改分区表必须整机重烧。
+改分区表必须整机重烧。
 
 注意:若 mkfirmware 在 envsetup 阶段报错退出(buildroot output 配置路径不一致),
 先执行 `cd buildroot && source build/envsetup.sh rockchip_rk3566` 刷新一次即可。
