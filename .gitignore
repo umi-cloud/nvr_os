@@ -33,6 +33,8 @@
 /external/security/
 /docs/Common/
 /tools/windows/
+# Windows 烧写工具,与 tools/windows/ 内容部分重复
+/RKDevTool_Release_v3.19/
 
 # ---- 编辑器与临时文件 ----
 *.swp
