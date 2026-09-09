@@ -34,17 +34,7 @@
 /docs/Common/
 # Windows 烧写工具,与 tools/windows/ 内容部分重复
 /RKDevTool_Release_v3.19/
-
-# tools/ 只保留构建与烧写必需的两块,其余(签名工具 85M、安全启动套件 19M、
-# 未被任何脚本引用的 boot_merger/programmer_image_tool 等)不入库:
-#   Linux_Pack_Firmware  build.sh updateimg 的 PACK_TOOL_DIR,内含
-#                        我们的 rk356x-nvr-package-file 打包清单
-#   Linux_Upgrade_Tool   v2.17 烧写工具(v1.54 的那个连 update.img 都解析不了)
-/tools/*
-!/tools/linux/
-/tools/linux/*
-!/tools/linux/Linux_Pack_Firmware/
-!/tools/linux/Linux_Upgrade_Tool/
+/tools/windows/
 
 # ---- 编辑器与临时文件 ----
 *.swp
