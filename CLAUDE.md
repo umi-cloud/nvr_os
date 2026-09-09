@@ -219,6 +219,8 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - 与官方基线对比:`git -C kernel diff origin/rk-6.1-rkr6.1 nvr-custom`
 - 不入库:`buildroot/output/`(50G 构建产物)、`buildroot/dl/`、`rockdev/`、`.repo/`
 - 子仓库远程指向 Rockchip Gerrit,不可推送
+- **改了 SDK 里的文件,同步更新 [`docs/nvr-customizations.md`](docs/nvr-customizations.md)**:
+  单仓收敛后仓库内部没有原厂基线可 diff,那份清单是唯一能分辨"哪些是我们改的"的地方
 - **repo sync 已不可用**:5.10 内核及 libmali/rkwifibt/rkaiq/chromium/xserver 的
   `.repo` 对象库随下线一并删除,而本机无 Gerrit 账号,manifest 里这些项目再也拉不回来。
   需要它们时从 `/data/backup/nvr-os-legacy-20260908/` 的 bundle 还原,或从 Rockchip 官方重新获取
