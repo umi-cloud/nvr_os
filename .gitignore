@@ -34,6 +34,10 @@
 /docs/Common/
 # Windows 烧写工具,与 tools/windows/ 内容部分重复
 /RKDevTool_Release_v3.19/
+
+# 原厂 SDK 压缩包(每个 10G 量级),只作比对来源,不入库
+/debian/*.tar.gz
+!/debian/bookworm-base-arm64.tar.gz
 /tools/windows/
 
 # ---- 编辑器与临时文件 ----
