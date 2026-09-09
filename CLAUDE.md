@@ -1,10 +1,11 @@
 # nvr-os — RK3566 Linux SDK
 
 Rockchip RK3566 Linux SDK,单内核单 rootfs:
-- `kernel-6.1/`:6.1(armbian 官方镜像 `rk-6.1-rkr6.1` = `linux-6.1-stan-rkr6.1`,无需账号)
+- `kernel/`:6.1(armbian 官方镜像 `rk-6.1-rkr6.1` = `linux-6.1-stan-rkr6.1`,无需账号)
 - rootfs:Debian 12 bookworm headless
 
-由 BoardConfig 的 `RK_KERNEL_DIR=kernel-6.1` 指定。**5.10 内核与 bullseye/linaro 用户环境已于
+由 BoardConfig 的 `RK_KERNEL_DIR=kernel` 指定(也是 build.sh 的默认值)。
+目录原名 `kernel`,5.10 下线后于 2026-09-09 改回 `kernel`。**5.10 内核与 bullseye/linaro 用户环境已于
 2026-09-08 下线**,同时删除的还有 dragon 板与四块 rk3568 EVB 板。归档见
 `/data/backup/nvr-os-legacy-20260908/`(kernel 与 rkwifibt 的完整 git bundle + README)。
 
@@ -71,6 +72,8 @@ SATA 板**用 RK809 内置 RTC**(rk808-rtc = rtc0,内核 hctosys/systohc 直接�
 关 dmc 后 4 核+硬编压力与 memtester 1GB 全过。两板差异:无 SATA 板 dmc 的 center-supply 是 950mV 固定
 `vdd_fixed`(调频不动电压),SATA 板是 RK809 `vdd_logic` 900mV(真调压)。恢复调频的路径写在 SATA dts 注释里。
 TF 卡槽存在,sdmmc0 保持启用(dwmmc "No normal pinctrl" 告警无害)。
+**adc-keys 已禁用**:box-demo 参考设计声明了 volume up/down 两个按键,本板没有,而该节点
+每 100ms 轮询一次 saradc 找按键(实测约每秒 10 次中断)。关掉后 saradc 无消费者,不再周期唤醒。
 看门狗 /dev/watchdog0 可用,**nvr-edge 需实现喂狗**。
 
 已完成:librknnrt 2.3.2(配 rknpu 0.9.8);首块板整机点亮验证(eMMC/网口/加速全家/分区自适应);
@@ -125,9 +128,19 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   这就是它原来每次开机 MAC 都变的原因。工具是官方
   `external/rktoolkit/vendor_storage.c`,构建期交叉编译进 `/usr/local/sbin`。**upgrade_tool 只能写 SN 不能写 MAC**
 - **主机名** `UMI-<SN 后 6 位>`(`nvr-hostname.service` 每次开机幂等):两块板同名时路由器按主机名派同一 IP
-- **两个网口都走 DHCP,千兆 end0 优先**(`10-lan.network` metric 100,`20-usb-eth.network` metric 2000):
-  两口同网段时内核只看 metric,相同会把 RTSP 和默认出口压到 100M 的 RTL8152 上(实测踩过);
-  只写 `en*` 会把 USB 口漏掉,线插那边就没网
+- **两个网口都走 DHCP,千兆 end0 优先**(`08-usb-eth.network` metric 2000,`10-lan.network` metric 100):
+  两口同网段时内核只看 metric,相同会把 RTSP 和默认出口压到 100M 的 RTL8152 上(实测踩过)。
+  **USB 口按 `Driver=r8152` 匹配且文件名排在前面**(networkd 取字典序第一个匹配的 .network):
+  接口名不是稳定契约,USB 网卡现在叫 eth1 只是因为 udev 没为它生成基于路径的名字;换 USB 口
+  或换版 systemd 都可能变成 `en` 开头,那样会被 `Name=en*` 抢走、拿到 metric 100 与千兆口并列。
+  **千兆口只能按名字匹配**:udev 不给 stmmac 平台网卡上报 `ID_NET_DRIVER`(`ethtool -i` 报
+  `st_gmac`,`udevadm info` 里没有该属性),写 `Driver=` 匹配不上 → 网口拿不到任何配置、没有
+  DHCP。改这两份配置前先在板上核对 `networkctl status`。`05-` 前缀留给 nvr-edge 运行时写的
+  网卡配置,优先级高于出厂这两份
+- **RPS 收包分流**(`nvr-net-tuning.service`,`rps_cpus=0xe`):GMAC 只有一个 RX 队列,中断固定
+  落在 CPU0,不开 RPS 时从软中断到 TCP 协议栈整条收包路径都挤在这一个核上(实测 NET_RX 软中断
+  CPU0 1050 万次、其余三核各约 38 万)。4~6 路 RTSP over TCP 全走这条路,CPU0 先到顶。
+  掩码留出 CPU0 给硬中断与 NAPI,和 IRQ 抢同一个核会互相打断
 - **网口灯**:RTL8211F LCR 由 PHY 节点 `realtek,led-lcr` 指定(stmmac 的 led_fixup 原来写死 0xc160),
   NVR 板取 0xc20b(LED0 常亮 link,LED1/LED2 收发闪烁),两颗灯都闪、没有常亮则改回 0xc160
 - **ssh host key 首启生成**:镜像不带 host key,`nvr-ssh-hostkeys.service` 首启 `ssh-keygen -A`,每台设备
@@ -186,7 +199,7 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - 选板:`./build.sh lunch`,配置文件在 `device/rockchip/rk356x/BoardConfig-*.mk`,选中后软链到 `device/rockchip/.BoardConfig.mk`
 - 区分逻辑:芯片级(`RK_UBOOT_DEFCONFIG`、rkbin loader)/ 板级(`RK_KERNEL_DIR` 选内核树 + `RK_KERNEL_DTS`,核心)/ 系统级(rootfs、分区表 parameter)
 - 现有板子(**只剩两块**,`BoardConfig.mk` 默认项已改指 SATA 板):
-  - `BoardConfig-rk3566-nvr-ddr3-v1.0.mk`:NVR 无 SATA 板(硬件同为 V1.0,旧命名 v10 已统一为 v1.0),8颗 8bit DDR3,**kernel-6.1** + DTS `rk3566-nvr-ddr3-v1.0`(override 风格,基于官方 box-demo dtsi,含电源域 1.8V/RGMII 时延等实板参数)+ defconfig 片段 `nvr.config`
+  - `BoardConfig-rk3566-nvr-ddr3-v1.0.mk`:NVR 无 SATA 板(硬件同为 V1.0,旧命名 v10 已统一为 v1.0),8颗 8bit DDR3,**kernel** + DTS `rk3566-nvr-ddr3-v1.0`(override 风格,基于官方 box-demo dtsi,含电源域 1.8V/RGMII 时延等实板参数)+ defconfig 片段 `nvr.config`
   - `BoardConfig-rk3566-nvr-ddr3-sata-v1.0.mk`:NVR SATA 板(原理图 UMI-NVR-RK3566-V1.0),DTS `rk3566-nvr-ddr3-sata-v1.0` include 无 SATA 板 dts 只维护差异:SATA 硬盘位(sata2/combphy2,combphy1 保留 USB3 host)、RK809-5 PMIC(box.dtsi 占位 regulator 删除后按原 label 重建,vdd_cpu 仍 PWM 调压)、HYM8563 RTC、RK809 codec 声卡;内核配置与无 SATA 板完全一致
 - ⚠ **两块板的固件不通用,烧前先确认 `.BoardConfig.mk` 软链指向哪块**。SATA 板 dts 会
   `/delete-node/` 掉 `vcc_1v8`/`vcc_3v3` 等固定 regulator,改由 i2c0 上的 RK809 提供;
@@ -202,8 +215,8 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - 本目录是 repo 工具管理的多仓库结构(`.repo/` + 各子仓库自带 `.git`)
 - **外层 `git add .` 不会收编子仓库内容**(只记 gitlink),勿直接全量提交
 - 所有定制改动已提交在各子仓库的 `nvr-custom` 分支(u-boot、buildroot、debian、device/rockchip、docs、tools 等);新改动继续提交到对应子仓库的 `nvr-custom`
-- `kernel-6.1/` 不归 repo 工具管,是独立 git 克隆(remote 为 armbian/linux-rockchip,可拉取更新),定制同样在 `nvr-custom` 分支
-- 与官方基线对比:`git -C kernel-6.1 diff origin/rk-6.1-rkr6.1 nvr-custom`
+- `kernel/` 不归 repo 工具管(与 5.10 时代不同),是独立 git 克隆(remote 为 armbian/linux-rockchip,可拉取更新),定制同样在 `nvr-custom` 分支
+- 与官方基线对比:`git -C kernel diff origin/rk-6.1-rkr6.1 nvr-custom`
 - 不入库:`buildroot/output/`(50G 构建产物)、`buildroot/dl/`、`rockdev/`、`.repo/`
 - 子仓库远程指向 Rockchip Gerrit,不可推送
 - **repo sync 已不可用**:5.10 内核及 libmali/rkwifibt/rkaiq/chromium/xserver 的
