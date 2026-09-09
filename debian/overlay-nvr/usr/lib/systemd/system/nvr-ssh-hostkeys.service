@@ -1,0 +1,13 @@
+[Unit]
+Description=Generate ssh host keys on first boot
+# 镜像里不带 host key(构建脚本删掉),首启在这里生成,每台设备各不相同
+Before=ssh.service
+ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+ExecStartPost=/bin/sync
+
+[Install]
+WantedBy=multi-user.target

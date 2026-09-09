@@ -1,0 +1,11 @@
+# NAME		Relative path
+# NVR 板打包清单: 无 oem/userdata 分区(首次开机由 rootfs 格式化)
+package-file	package-file
+bootloader	Image/MiniLoaderAll.bin
+parameter	Image/parameter.txt
+uboot		Image/uboot.img
+misc		Image/misc.img
+boot		Image/boot.img
+recovery	Image/recovery.img
+rootfs		Image/rootfs.img
+backup		RESERVED

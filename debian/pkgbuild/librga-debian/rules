@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+# 预编译库直接安装:SONAME 是 librga.so(无版本号),另留 librga.so.2 兼容旧的链接名
+LIBDIR = debian/tmp/usr/lib/aarch64-linux-gnu
+%:
+	dh $@
+override_dh_auto_build:
+override_dh_auto_install:
+	install -d $(LIBDIR) debian/tmp/usr/include/rga $(LIBDIR)/pkgconfig
+	install -m644 prebuilt/librga.so $(LIBDIR)/librga.so
+	ln -sf librga.so $(LIBDIR)/librga.so.2
+	install -m644 include/*.h debian/tmp/usr/include/rga/
+	install -m644 debian/librga.pc $(LIBDIR)/pkgconfig/librga.pc
+override_dh_shlibdeps:
+	dh_shlibdeps -- -xlibrga2

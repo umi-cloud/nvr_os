@@ -1,0 +1,129 @@
+[    2.462789] input: bt-powerkey as /devices/platform/wireless-bluetooth/input/input2
+[    2.463128] Key type dns_resolver registered
+[    2.464300] gc8034 2-0037: driver version: 00.01.09
+[    2.464416] gc8034 2-0037: Failed to get power-gpios, maybe no use
+[    2.464612] gc8034 2-0037: supply dovdd not found, using dummy regulator
+[    2.464732] gc8034 2-0037: supply dvdd not found, using dummy regulator
+[    2.464785] gc8034 2-0037: supply avdd not found, using dummy regulator
+[    2.464911] gc8034 2-0037: lane_num(4)  pixel_rate(319887360)
+[    2.464934] gc8034 2-0037: could not get default pinstate
+[    2.464949] gc8034 2-0037: could not get sleep pinstate
+[    2.471029] mmc2: SDHCI controller on fe310000.sdhci [fe310000.sdhci] using ADMA
+[    2.471052] dwmmc_rockchip fe2c0000.dwmmc: card claims to support voltages below defined range
+[    2.483167] usb usb5: New USB device found, idVendor=1d6b, idProduct=0001, bcdDevice= 6.01
+[    2.483198] usb usb5: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    2.483215] usb usb5: Product: Generic Platform OHCI controller
+[    2.483229] usb usb5: Manufacturer: Linux 6.1.118 ohci_hcd
+[    2.483243] usb usb5: SerialNumber: fd840000.usb
+[    2.483746] hub 5-0:1.0: USB hub found
+[    2.483791] hub 5-0:1.0: 1 port detected
+[    2.484221] usb usb6: New USB device found, idVendor=1d6b, idProduct=0001, bcdDevice= 6.01
+[    2.484248] usb usb6: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    2.484265] usb usb6: Product: Generic Platform OHCI controller
+[    2.484291] usb usb6: Manufacturer: Linux 6.1.118 ohci_hcd
+[    2.484305] usb usb6: SerialNumber: fd8c0000.usb
+[    2.484654] hub 6-0:1.0: USB hub found
+[    2.484695] hub 6-0:1.0: 1 port detected
+[    2.485795] mmc_host mmc1: Bus speed (slot 0) = 50000000Hz (slot req 50000000Hz, actual 50000000HZ div = 0)
+[    2.486689] mmc1: new high speed SDIO card at address 0001
+[    2.579797] ata1: SATA link down (SStatus 0 SControl 300)
+[    2.679415] rk3x-i2c fe5b0000.i2c: timeout, ipd: 0x11, state: 1
+[    2.679460] gc8034 2-0037: gc8034 read reg:0xf0 failed !
+[    2.883010] rk3x-i2c fe5b0000.i2c: timeout, ipd: 0x11, state: 1
+[    2.883044] gc8034 2-0037: gc8034 read reg:0xf1 failed !
+[    2.883060] gc8034 2-0037: Unexpected sensor id(000000), ret(-110)
+[    2.884527] Loading compiled-in X.509 certificates
+[    2.886435] pstore: Using crash dump compression: deflate
+[    2.893467] rga2 fdeb0000.rk_rga: probe successfully, irq = 69, hw_version:3.2.63318
+[    2.893806] rga: IOMMU binding successfully, default mapping core[0x4]
+[    2.894028] rga: Module initialized. v1.3.9
+[    2.913622] mpp_rkvenc fdf40000.rkvenc: Adding to iommu group 5
+[    2.913886] mpp_rkvenc fdf40000.rkvenc: probing start
+[    2.914190] mpp_rkvenc fdf40000.rkvenc: no regulator, devfreq is disabled
+[    2.914507] mpp_rkvenc fdf40000.rkvenc: probing finish
+[    2.914831] mpp_vdpu2 fdea0400.vdpu: Adding to iommu group 1
+[    2.915008] mpp_vdpu2 fdea0400.vdpu: probe device
+[    2.915291] mpp_vdpu2 fdea0400.vdpu: probing finish
+[    2.915566] mpp_vepu2 fdee0000.vepu: Adding to iommu group 3
+[    2.915727] mpp_vepu2 fdee0000.vepu: probing start
+[    2.915979] mpp_vepu2 fdee0000.vepu: probing finish
+[    2.916228] mpp-iep2 fdef0000.iep: Adding to iommu group 4
+[    2.916343] mpp-iep2 fdef0000.iep: probe device
+[    2.916854] mpp-iep2 fdef0000.iep: probing finish
+[    2.917182] mpp_jpgdec fded0000.jpegd: Adding to iommu group 2
+[    2.917369] mpp_jpgdec fded0000.jpegd: probe device
+[    2.917670] mpp_jpgdec fded0000.jpegd: probing finish
+[    2.918018] mpp_rkvdec2 fdf80200.rkvdec: Adding to iommu group 6
+[    2.918201] mpp_rkvdec2 fdf80200.rkvdec: rkvdec, probing start
+[    2.918484] mpp_rkvdec2 fdf80200.rkvdec: shared_niu_a is not found!
+[    2.918504] rkvdec2_init:1250: No niu aclk reset resource define
+[    2.918521] mpp_rkvdec2 fdf80200.rkvdec: shared_niu_h is not found!
+[    2.918535] rkvdec2_init:1253: No niu hclk reset resource define
+[    2.918714] mpp_rkvdec2 fdf80200.rkvdec: bin=0
+[    2.918818] mpp_rkvdec2 fdf80200.rkvdec: leakage=50
+[    2.918840] mpp_rkvdec2 fdf80200.rkvdec: leakage-volt-sel=0
+[    2.918882] mpp_rkvdec2 fdf80200.rkvdec: pvtm = 92260, from nvmem
+[    2.918902] mpp_rkvdec2 fdf80200.rkvdec: pvtm-volt-sel=1
+[    2.919324] mpp_rkvdec2 fdf80200.rkvdec: avs=0
+[    2.919499] mpp_rkvdec2 fdf80200.rkvdec: using default check_rate_volt
+[    2.919530] mpp_rkvdec2 fdf80200.rkvdec: l=-2147483648 h=2147483647 hyst=0 l_limit=0 h_limit=0 h_table=0
+[    2.919693] mpp_rkvdec2 fdf80200.rkvdec: sram_start 0x00000000fdcc0000
+[    2.919713] mpp_rkvdec2 fdf80200.rkvdec: rcb_iova 0x0000000010000000
+[    2.919728] mpp_rkvdec2 fdf80200.rkvdec: sram_size 45056
+[    2.919741] mpp_rkvdec2 fdf80200.rkvdec: rcb_size 65536
+[    2.919755] mpp_rkvdec2 fdf80200.rkvdec: min_width 512
+[    2.919818] mpp_rkvdec2 fdf80200.rkvdec: link mode probe finish
+[    2.919888] mpp_rkvdec2 fdf80200.rkvdec: probing finish
+[    2.919905] mpp_rkvdec2 fdf80200.rkvdec: probing finish
+[    2.920506] input: adc-keys as /devices/platform/adc-keys/input/input3
+[    2.921320] rockchip-dmc dmc: bin=0
+[    2.921392] rockchip-dmc dmc: leakage=50
+[    2.921414] rockchip-dmc dmc: leakage-volt-sel=0
+[    2.921454] rockchip-dmc dmc: pvtm = 92260, from nvmem
+[    2.921474] rockchip-dmc dmc: pvtm-volt-sel=1
+[    2.921706] core: _opp_supported_by_regulators: OPP minuV: 850000 maxuV: 850000, not supported by regulator
+[    2.921729] rockchip-dmc dmc: _opp_add: OPP not supported by regulators (1560000000)
+[    2.921840] rockchip-dmc dmc: avs=0
+[    2.921866] rockchip-dmc dmc: current ATF version 0x102
+[    2.922382] rockchip-dmc dmc: cannot get frequency info
+[    2.922400] rockchip-dmc: probe of dmc failed with error -61
+[    2.963602] cpu cpu0: bin=0
+[    2.963763] cpu cpu0: leakage=26
+[    2.963815] cpu cpu0: pvtm = 92260, from nvmem
+[    2.963836] cpu cpu0: pvtm-volt-sel=2
+[    2.964722] cpu cpu0: avs=0
+[    2.964889] cpu cpu0: l=0 h=2147483647 hyst=5000 l_limit=0 h_limit=0 h_table=0
+[    2.965166] cpu cpu0: EM: created perf domain
+[    2.966820] RKNPU fde40000.npu: Adding to iommu group 0
+[    2.967592] RKNPU fde40000.npu: RKNPU: rknpu iommu is enabled, using iommu mode
+[    2.967903] RKNPU fde40000.npu: can't request region for resource [mem 0xfde40000-0xfde4ffff]
+[    2.967987] RKNPU fde40000.npu: error -ENXIO: IRQ npu_irq not found
+[    2.968800] [drm] Initialized rknpu 0.9.8 20240828 for fde40000.npu on minor 1
+[    2.969301] RKNPU fde40000.npu: bin=0
+[    2.969402] RKNPU fde40000.npu: leakage=3
+[    2.969468] RKNPU fde40000.npu: pvtm = 92260, from nvmem
+[    2.969507] RKNPU fde40000.npu: pvtm-volt-sel=2
+[    2.970444] RKNPU fde40000.npu: avs=0
+[    2.970682] RKNPU fde40000.npu: l=0 h=2147483647 hyst=5000 l_limit=0 h_limit=0 h_table=0
+[    2.972276] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    2.974734] cfg80211: Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    2.975931] cfg80211: Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    2.976065] clk: Disabling unused clocks
+[    2.977009] platform regulatory.0: Direct firmware load for regulatory.db failed with error -2
+[    2.977066] cfg80211: failed to load regulatory.db
+[    2.977488] rockchip-pm rockchip-suspend: not set pwm-regulator-config
+[    2.977763] rockchip-suspend not set sleep-mode-config for mem-lite
+[    2.977777] rockchip-suspend not set wakeup-config for mem-lite
+[    2.977789] rockchip-suspend not set sleep-mode-config for mem-ultra
+[    2.977798] rockchip-suspend not set wakeup-config for mem-ultra
+[    2.978538] I : [File] : drivers/gpu/arm/mali400/mali/linux/mali_kernel_linux.c; [Line] : 407; [Func] : mali_module_init(); svn_rev_string_from_arm of this mali_ko is '', rk_ko_ver is '5', built at '11:40:14', on 'Jul 22 2026'.
+[    2.978827] Mali: 
+[    2.978830] Mali device driver loaded
+[    2.978892] rkisp rkisp-vir0: clear unready subdev num: 2
+[    2.979417] rkisp-vir0: update sensor failed
+[    2.979439] ALSA device list:
+[    2.979449]   #0: hdmi-sound
+[    2.979458]   #1: ROCKCHIP,SPDIF
+[    2.979606] Waiting for root device PARTUUID=614e0000-0000...
+[    5.487160] vendor storage:20190527 ret = -1
+[   13.056255] platform mtd_vendor_storage: deferred probe pending

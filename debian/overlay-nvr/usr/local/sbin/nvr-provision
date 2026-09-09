@@ -1,0 +1,29 @@
+#!/bin/sh
+# 产线写入设备身份:SN(16 位字母数字,UMNVR3566 开头)与两个网口 MAC,落到 eMMC vendor 区。
+#   nvr-provision <SN> <MAC-gmac1> <MAC-usb>       写入并回读
+#   nvr-provision show                              只回读
+# u-boot 下次启动读取:SN → /serial-number(nvr-edge/vsync 的设备 SN,主机名 nvr-<后 6 位>),
+# MAC1 → gmac1(end0),MAC2 → USB 网口(udev 按 .link 在开机套用)。写完需重启生效。
+set -e
+show() {
+	echo "SN : $(vendor_storage -r VENDOR_SN_ID -t string 2>/dev/null | grep -aoE 'UMNVR[0-9A-Za-z]+' | head -1)"
+	hex=$(vendor_storage -r VENDOR_LAN_MAC_ID -t hex 2>/dev/null | grep -aE '^ *0000-000f:' | sed 's/^ *0000-000f: *//' | tr -d ' \r')
+	[ ${#hex} -ge 24 ] && echo "MAC: $(echo $hex | cut -c1-12 | sed 's/../&:/g;s/:$//')  $(echo $hex | cut -c13-24 | sed 's/../&:/g;s/:$//')"
+}
+[ "$1" = show ] && { show; exit 0; }
+[ $# -eq 3 ] || { echo "用法: nvr-provision <SN 16位> <MAC-gmac1> <MAC-usb> | show" >&2; exit 2; }
+sn=$1; m1=$(echo "$2" | tr 'A-F' 'a-f'); m2=$(echo "$3" | tr 'A-F' 'a-f')
+case "$sn" in UMNVR3566??????? ) ;; *) echo "SN 必须为 UMNVR3566 开头共 16 位" >&2; exit 1;; esac
+printf '%s' "$sn" | grep -qE '^[A-Za-z0-9]{16}$' || { echo "SN 只能含字母数字" >&2; exit 1; }
+for m in "$m1" "$m2"; do
+	echo "$m" | grep -qE '^([0-9a-f]{2}:){5}[0-9a-f]{2}$' || { echo "MAC 格式错误: $m" >&2; exit 1; }
+	case "$m" in ?[13579bdf]:*) echo "MAC 首字节最低位为 1(组播): $m" >&2; exit 1;; esac
+done
+[ "$m1" != "$m2" ] || { echo "两个 MAC 不能相同" >&2; exit 1; }
+hex="$(echo "$m1$m2" | tr -d ':')"
+vendor_storage -w VENDOR_SN_ID -t string -i "$sn" >/dev/null
+vendor_storage -w VENDOR_LAN_MAC_ID -t hex -i "$hex" >/dev/null
+sync
+# USB 网口的 MAC 由 udev 按 .link 在开机时套上,这里立即生成文件,下次开机生效
+/usr/local/sbin/nvr-usb-eth-link
+echo "已写入,重启后生效:"; show

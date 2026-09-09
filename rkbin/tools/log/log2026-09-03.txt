@@ -1,0 +1,108 @@
+08:44:48 	Upgrade Tool v1.54
+
+08:44:48 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:44:48 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:44:48 	Upgrade Tool v1.54
+
+08:44:48 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:44:48 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:44:48 	Upgrade Tool v1.54
+
+08:44:48 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:44:48 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:49:11 	Upgrade Tool v1.54
+
+08:49:11 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:49:11 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:51:53 	Upgrade Tool v1.54
+
+08:51:53 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:51:53 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:52:07 	Upgrade Tool v1.54
+
+08:52:07 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:52:07 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:52:40 	Upgrade Tool v1.54
+
+08:52:40 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:52:40 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:54:12 	Upgrade Tool v1.54
+
+08:54:12 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:54:12 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:55:54 	Upgrade Tool v1.54
+
+08:55:54 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:55:54 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:56:01 	Upgrade Tool v1.54
+
+08:56:01 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:56:01 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:57:07 	Upgrade Tool v1.54
+
+08:57:07 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:57:07 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:57:07 	Upgrade Tool v1.54
+
+08:57:07 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:57:07 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:57:07 	Error:RKU_Write failed,err=-1
+08:57:07 	Error:RKU_TestDeviceReady failed,err=-3
+08:57:07 	Upgrade Tool v1.54
+
+08:57:07 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:57:07 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:57:07 	Error:RKU_Write failed,err=-1
+08:57:07 	Error:RKU_ReadChipInfo failed,err=-3
+08:57:07 	Upgrade Tool v1.54
+
+08:57:07 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:57:07 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:57:07 	Error:RKU_Write failed,err=-1
+08:57:07 	Error:RKU_ReadFlashInfo failed,err=-3
+08:57:41 	Upgrade Tool v1.54
+
+08:57:41 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:57:41 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:57:41 	Error:RKU_Write failed,err=-1
+08:57:41 	Error:RKU_TestDeviceReady failed,err=-3
+08:58:07 	Upgrade Tool v1.54
+
+08:58:07 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:58:07 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+08:58:07 	Upgrade Tool v1.54
+
+08:58:07 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+08:58:07 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+09:02:01 	Upgrade Tool v1.54
+
+09:02:01 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+09:02:01 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+09:02:12 	Upgrade Tool v1.54
+
+09:02:12 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+09:02:12 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+09:06:47 	Upgrade Tool v1.54
+
+09:06:47 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+09:06:47 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+09:08:40 	Upgrade Tool v1.54
+
+09:08:40 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+09:08:40 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+09:42:48 	Upgrade Tool v1.54
+
+09:42:48 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+09:42:48 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+09:49:54 	Upgrade Tool v1.54
+
+09:49:54 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+09:49:54 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+19:10:14 	Upgrade Tool v1.54
+
+19:10:14 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+19:10:14 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+19:10:30 	Upgrade Tool v1.54
+
+19:10:30 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+19:10:30 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini

@@ -1,0 +1,46 @@
+[Unit]
+Description=Vsync Plugin (device sync/report)
+After=network-online.target nvr.service
+Wants=network-online.target
+# 工作目录在 userdata、部署目录在 vcache,两个分区都必须先挂载
+# (首启由 format-data-parts.service 格式化)。少了 vcache 这条,
+# 启动脚本的 mkdir 会落在被挂载盖住的 rootfs 上,内容看不见还白占 rootfs
+RequiresMountsFor=/userdata /vcache
+ConditionPathExists=/usr/local/lib/vsync/vsync
+
+[Service]
+Type=simple
+User=root
+Group=root
+# 前缀 - :首启时 userdata 刚格式化,/userdata/vsync 尚不存在,
+# 无容错会在 exec 前 chdir 失败(200/CHDIR)导致崩溃循环;目录由启动脚本创建
+WorkingDirectory=-/userdata/vsync
+EnvironmentFile=-/etc/nvr/vsync.env
+EnvironmentFile=-/userdata/vsync/vsync.env
+# 参数由启动脚本组装(设备 SN 需从设备树动态取,见脚本注释)
+# wait-online 服务被 mask 了(见构建脚本),network-online.target 开机即就绪,DHCP 其实还没拿到;
+# vsync 连不上就直接退出,每次开机都先失败一次再由 Restart 拉起。这里等任一网口可路由,最多 30 秒。
+ExecStartPre=-/lib/systemd/systemd-networkd-wait-online --any --timeout=30
+ExecStart=/usr/local/bin/vsync
+ExecStop=/bin/kill -s TERM $MAINPID
+Restart=always
+# 程序启动即检查网络,不通就 exit(1)。开机时 DHCP 常未完成
+# (wait-online 被 mask,network-online.target 会立即就绪),
+# 故重试间隔放宽到 15s,避免开机窗口内空转重启
+RestartSec=15
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vsync
+
+NoNewPrivileges=yes
+LimitNOFILE=8192
+
+ProtectSystem=full
+ProtectHome=yes
+# userdata:工作目录(含运行体自更新写入的 .new/.backup)与 logs/
+# vcache:同步下发内容的部署目录
+ReadWritePaths=/userdata /vcache
+
+[Install]
+WantedBy=multi-user.target

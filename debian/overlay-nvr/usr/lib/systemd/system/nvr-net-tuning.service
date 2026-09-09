@@ -1,0 +1,15 @@
+[Unit]
+Description=NVR network receive tuning (RPS)
+# 网卡出现之后才有 queues/rx-*;USB 网卡枚举较晚,networkd 起来即可认为都在了
+After=systemd-networkd.service
+Wants=systemd-networkd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/nvr-net-tuning
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

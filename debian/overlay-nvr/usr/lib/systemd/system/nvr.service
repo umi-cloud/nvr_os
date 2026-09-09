@@ -1,0 +1,52 @@
+[Unit]
+Description=NVR Edge Service
+After=network-online.target
+Wants=network-online.target
+# work-dir 在 userdata 分区,必须等它挂载(首启由 format-data-parts.service 格式化)
+RequiresMountsFor=/userdata
+
+[Service]
+Type=simple
+User=root
+Group=root
+# 前缀 - :首启时 userdata 刚格式化,/userdata/nvr 尚不存在,
+# 无容错会在 exec 前 chdir 失败(200/CHDIR)导致崩溃循环;目录由引导器创建
+WorkingDirectory=-/userdata/nvr
+# 镜像内为默认值,userdata 上的同名文件可覆盖(产线/现场注入设备身份);
+# 前缀 - 表示文件缺失不阻止启动 —— 身份变量为空时 nvr-edge 仍可启动待绑定
+EnvironmentFile=-/etc/nvr/nvr.env
+EnvironmentFile=-/userdata/nvr/nvr.env
+# tursogo(libSQL)启动时把动态库解压到 os.UserCacheDir();默认 $HOME/.cache
+# 落在 /root,被下面的 ProtectHome 挡死(panic: mkdir /root/.cache: permission denied)。
+# 指到 userdata 既可写又持久,免去每次启动重解压,且不必削弱沙箱。
+Environment=XDG_CACHE_HOME=/userdata/nvr/.cache
+# 参数由引导器按上面两个 env 文件组装(见 /usr/local/bin/nvr):
+# unit 里写 ${VAR} 时空值会整个消失,身份未绑定会导致参数错位
+ExecStart=/usr/local/bin/nvr
+ExecStop=/bin/kill -s TERM $MAINPID
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nvr
+
+# CAP_SYS_RAWIO: smartctl 经 SAT/ATA 透传 ioctl(SG_IO) 读外接盘 SMART,
+# 缺它只能打开设备([SAT] 可识别)但读不到属性 → 退出码 2、无 SMART 数据。
+# NoNewPrivileges=yes 下须放 AmbientCapabilities 才能真正授予进程。
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SYS_RAWIO
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SYS_RAWIO
+NoNewPrivileges=yes
+
+LimitNOFILE=65536
+LimitNPROC=8192
+
+ProtectSystem=full
+ProtectHome=yes
+# /userdata: work-dir(运行体 bin/、DB、模型、自更新双槽);/tmp: 无盘时录像段暂存(tmpfs);
+# /media: 外接盘录像根。
+# 运行体必须可写:自更新切槽后要把活动槽二进制复制回固定启动路径,
+# 写不进去会导致整次更新回滚(故引导器从 /userdata/nvr/bin 启动而非 rootfs 基线)
+ReadWritePaths=/userdata /media /tmp /mnt
+
+[Install]
+WantedBy=multi-user.target

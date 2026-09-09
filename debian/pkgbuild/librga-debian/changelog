@@ -1,0 +1,5 @@
+librga (1:1.10.6-1) bookworm; urgency=medium
+
+  * 升级到上游 airockchip/librga 1.10.6_[3](2026-06-10 预编译库);epoch 1 覆盖旧 2.1.0-1 编号
+
+ -- nvr-os <nvr-os@localhost>  Fri, 04 Sep 2026 12:09:46 +0800

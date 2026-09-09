@@ -1,0 +1,14 @@
+[Unit]
+Description=Set unique hostname from device serial number
+DefaultDependencies=no
+After=local-fs.target
+Before=systemd-networkd.service network-pre.target
+ConditionPathExists=/proc/device-tree/serial-number
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/nvr-hostname
+
+[Install]
+WantedBy=sysinit.target

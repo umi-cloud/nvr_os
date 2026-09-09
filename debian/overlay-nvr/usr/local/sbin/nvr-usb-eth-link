@@ -1,0 +1,15 @@
+#!/bin/sh
+# 按 vendor 区第二个 MAC 生成 USB 网口的 systemd .link:开机由 udev 在网卡出现、尚未 UP 时套上,
+# 不在运行中改 MAC(r8152 运行中改 MAC 曾间歇性 Tx timeout 卡死)。
+# 本脚本只写文件,写入后从下一次开机生效;nvr-provision 写完 vendor 区会立即调用它。
+# 无 vendor MAC 时不生成(USB 口保持随机 MAC),已一致时不动。
+VS=/usr/local/sbin/vendor_storage
+LINK=/etc/systemd/network/20-usb-eth.link
+hex=$($VS -r VENDOR_LAN_MAC_ID -t hex 2>/dev/null | grep -aE '^ *0000-000f:' | sed 's/^ *0000-000f: *//' | tr -d ' \r')
+[ ${#hex} -ge 24 ] || exit 0
+m2=$(echo "$hex" | cut -c13-24 | sed 's/../&:/g; s/:$//')
+case "$m2" in ?[13579bdf]:*) exit 0 ;; esac   # 组播位置 1 视为写坏
+[ -f "$LINK" ] && grep -q "MACAddress=$m2" "$LINK" && exit 0
+printf '[Match]\nDriver=r8152\n\n[Link]\nMACAddress=%s\nNamePolicy=keep kernel database onboard slot path\n' "$m2" > "$LINK.tmp"
+mv "$LINK.tmp" "$LINK"; sync
+echo "已生成 $LINK(MAC $m2),下次开机生效"

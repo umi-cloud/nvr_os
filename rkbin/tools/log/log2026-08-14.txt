@@ -1,0 +1,123 @@
+18:33:56 	Upgrade Tool v1.54
+
+18:33:56 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:33:56 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:34:31 	Upgrade Tool v1.54
+
+18:34:31 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:34:31 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:35:36 	Upgrade Tool v1.54
+
+18:35:36 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:35:36 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:36:04 	Upgrade Tool v1.54
+
+18:36:04 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:36:04 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:36:24 	Upgrade Tool v1.54
+
+18:36:24 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:36:24 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:37:07 	Upgrade Tool v1.54
+
+18:37:07 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:37:07 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:37:36 	Upgrade Tool v1.54
+
+18:37:36 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:37:36 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:37:36 	Error:InitializeUsb-->open device failed,err=-3
+18:37:36 	Upgrade Tool v1.54
+
+18:37:36 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:37:36 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:37:36 	Error:InitializeUsb-->open device failed,err=-3
+18:37:36 	Upgrade Tool v1.54
+
+18:37:36 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:37:36 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:37:36 	Error:InitializeUsb-->open device failed,err=-3
+18:37:36 	Upgrade Tool v1.54
+
+18:37:36 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:37:36 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:37:36 	Error:InitializeUsb-->open device failed,err=-3
+18:37:36 	Upgrade Tool v1.54
+
+18:37:36 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:37:36 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:37:36 	Error:InitializeUsb-->open device failed,err=-3
+18:40:07 	Upgrade Tool v1.54
+
+18:40:07 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:40:07 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:40:14 	Upgrade Tool v1.54
+
+18:40:14 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:40:14 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:40:14 	Error:RKU_Write failed,err=-1
+18:40:14 	Error:RKU_TestDeviceReady failed,err=-3
+18:40:14 	Upgrade Tool v1.54
+
+18:40:14 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:40:14 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:40:14 	Error:RKU_Write failed,err=-1
+18:40:14 	Error:RKU_ReadChipInfo failed,err=-3
+18:40:14 	Upgrade Tool v1.54
+
+18:40:14 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:40:14 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:40:14 	Error:RKU_Write failed,err=-1
+18:40:14 	Error:RKU_ReadFlashInfo failed,err=-3
+18:40:14 	Upgrade Tool v1.54
+
+18:40:14 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:40:14 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:40:14 	Error:RKU_Write failed,err=-1
+18:40:14 	Error:RKU_ReadFlashID failed,err=-3
+18:40:14 	Upgrade Tool v1.54
+
+18:40:14 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:40:14 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:40:14 	Error:RKU_Write failed,err=-1
+18:40:14 	Error:read_capability failed,err=-3
+18:40:40 	Upgrade Tool v1.54
+
+18:40:40 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:40:40 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:41:06 	Upgrade Tool v1.54
+
+18:41:06 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:41:06 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:41:06 	Upgrade Tool v1.54
+
+18:41:06 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:41:06 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:43:08 	Upgrade Tool v1.54
+
+18:43:08 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:43:08 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:43:55 	Upgrade Tool v1.54
+
+18:43:55 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:43:55 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:43:55 	Upgrade Tool v1.54
+
+18:43:55 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:43:55 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:44:52 	Upgrade Tool v1.54
+
+18:44:52 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:44:52 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:45:49 	Upgrade Tool v1.54
+
+18:45:49 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:45:49 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:46:11 	Upgrade Tool v1.54
+
+18:46:11 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:46:11 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini
+18:47:20 	Upgrade Tool v1.54
+
+18:47:20 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+18:47:20 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini

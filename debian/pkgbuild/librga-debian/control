@@ -1,0 +1,19 @@
+Source: librga
+Section: libs
+Priority: optional
+Maintainer: nvr-os <nvr-os@localhost>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/airockchip/librga
+
+Package: librga2
+Architecture: arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Userspace interface to Rockchip RGA 2D accelerator
+ 上游 airockchip/librga 只发布预编译库(1.10.6),本包直接打包该库与头文件。
+
+Package: librga-dev
+Architecture: arm64
+Section: libdevel
+Depends: librga2 (= ${binary:Version}), ${misc:Depends}
+Description: Development files for librga

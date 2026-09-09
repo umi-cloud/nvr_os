@@ -1,0 +1,11 @@
+[Unit]
+Description=Generate USB NIC .link from vendor-storage MAC
+After=local-fs.target
+ConditionPathExists=/dev/vendor_storage
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nvr-usb-eth-link
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,284 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * NVR 板 (RK3566, 8颗 8bit DDR3, RTL8211F PHY) — kernel 6.1
+ * 基于官方 box-demo dtsi,板级差异以 override 维护(从 5.10 定制移植)
+ * 待移植驱动: rtl8822cs WiFi / BT uart / vfd,相关节点先置 disabled 或占位
+ */
+
+/dts-v1/;
+
+#include "rk3566-box-demo-v10.dtsi"
+#include "rk3568-android.dtsi"
+
+/ {
+	model = "RK3566 NVR DDR3 V1.0 Board";
+	compatible = "rockchip,rk3566-nvr-ddr3-v1.0", "rockchip,rk3566";
+
+	/*
+	 * 系统灯 WORKING_LEDEN_H(GPIO0_C3,box-demo dtsi 的 work-led):内核起来后常亮表示在运行。
+	 * 需要 CONFIG_LEDS_TRIGGERS(nvr.config 已开),否则 default-trigger 被忽略、灯永远不亮。
+	 * 要改闪烁:echo heartbeat > /sys/class/leds/work-led/trigger。ir-led 本板无此器件,不动。
+	 */
+	gpio-leds {
+		work-led {
+			linux,default-trigger = "default-on";
+		};
+	};
+
+	/* 显式指定 root(完整 PARTUUID),不依赖 u-boot/dtsi 默认值 */
+	chosen {
+		bootargs = "earlycon=uart8250,mmio32,0xfe660000 console=ttyFIQ0 console=tty1 video=HDMI-A-1:1920x1080@60e root=PARTUUID=614e0000-0000-4b53-8000-1d28000054a9 rootfstype=ext4 rw rootwait";
+	};
+
+};
+
+/*
+ * MAC 注入约定:u-boot 按 /aliases 的 ethernetN 把 env ethN addr 写进 local-mac-address
+ * (fdt_support.c fdt_fixup_ethernet),env 来自 vendor storage 的 LAN_MAC_ID(12 字节 =
+ * 两个 MAC)。rk356x.dtsi 只定义了 ethernet1 = &gmac1(ethernet0 是 RK3568 的 gmac0),
+ * 结果 gmac1 拿到的是第二个 MAC、第一个白白浪费。这里改成 gmac1 = ethernet0 取第一个,
+ * 第二个留给 USB 网口(r8152 无 EEPROM、每次开机随机,由 rootfs 侧开机应用)。
+ * 副作用:systemd 按别名给网口命名,gmac1 从 end1 变为 end0(networkd 配置匹配 en*,不受影响)。
+ * ethernet1 必须删掉,否则 u-boot 会先后写两次、后写的 eth1addr 覆盖前者。
+ */
+/ {
+	aliases {
+		/delete-property/ ethernet1;
+		ethernet0 = &gmac1;
+	};
+};
+
+/*
+ * 网口灯(RTL8211F LCR,见 stmmac_main.c phy_rtl8211f_led_fixup)。RJ45 两颗灯,按常规:
+ * 一颗常亮表示 link(10/100/1000 都亮),另一颗随收发闪烁。
+ * 原厂写死的 0xc160 是 LED1=link、LED2=ACT,在本板上不对,说明 RJ45 没接 LED1/LED2 这一对;
+ * 故 LED0 = link 常亮,LED1、LED2 都只做 ACT 闪烁 —— RJ45 无论接 (LED0,LED1) 还是 (LED0,LED2)
+ * 都是"一常亮一闪烁"。bit15 沿用原模式位。若实测两颗都闪、没有常亮,说明接的是 (LED1,LED2),
+ * 改回 0xc160 即可。
+ */
+&rgmii_phy1 {
+	realtek,led-lcr = <0xc20b>;
+};
+
+/* 板级 RGMII 时延实测值 */
+&gmac1 {
+	tx_delay = <0x4b>;
+	rx_delay = <0x2b>;
+};
+
+/* 实板 vccio4/vccio6 为 1.8V,配 3.3V 会损坏 IO */
+&pmu_io_domains {
+	vccio4-supply = <&vcc_1v8>;
+	vccio6-supply = <&vcc_1v8>;
+};
+
+&hdmi_sound {
+	simple-audio-card,mclk-fs = <128>;
+};
+
+&usbdrd_dwc3 {
+	dr_mode = "host";
+};
+
+/* 本板无 WiFi/BT 模组,关闭无线相关节点(SDIO 控制器、BT 串口一并禁用) */
+&wireless_wlan {
+	status = "disabled";
+};
+
+&wireless_bluetooth {
+	status = "disabled";
+};
+
+&sdmmc1 {
+	status = "disabled";
+};
+
+&uart1 {
+	status = "disabled";
+};
+
+/*
+ * DDR3 动态调频: opp 档位与 loader/ATF 训练的 fsp 频点一致(324/528/780/1056),
+ * 官方表只有 LPDDR4X 的 1560MHz,与本板 DDR3 无交集导致 dmc probe 失败
+ */
+&dmc_opp_table {
+	/delete-node/ opp-1560000000;
+
+	opp-324000000 {
+		opp-supported-hw = <0xff 0xffff>;
+		opp-hz = /bits/ 64 <324000000>;
+		opp-microvolt = <900000 900000 1000000>;
+	};
+	opp-528000000 {
+		opp-supported-hw = <0xff 0xffff>;
+		opp-hz = /bits/ 64 <528000000>;
+		opp-microvolt = <900000 900000 1000000>;
+	};
+	opp-780000000 {
+		opp-supported-hw = <0xff 0xffff>;
+		opp-hz = /bits/ 64 <780000000>;
+		opp-microvolt = <900000 900000 1000000>;
+	};
+	opp-1056000000 {
+		opp-supported-hw = <0xff 0xffff>;
+		opp-hz = /bits/ 64 <1056000000>;
+		opp-microvolt = <900000 900000 1000000>;
+	};
+};
+
+/* DDR 负载监测器,dmc 自动升频的数据来源(rk356x.dtsi 默认 disabled) */
+&dfi {
+	status = "okay";
+};
+
+/*
+ * 补 GPU OPP 的 opp-supported-hw:rk356x.dtsi 保留了表级 rockchip,supported-hw,
+ * 却把每条 OPP 的 opp-supported-hw 注释掉了。该属性一旦缺失,_opp_is_supported()
+ * 读不到属性返回 -EINVAL,全部 OPP 被判不支持 → GPU 无 devfreq、固定频率运行。
+ * 取值与 cpu0_opp_table 一致(rk3566 soc version=0,在 0xfb 掩码内)。
+ * 注意 800MHz 档已被 rk3566-box.dtsi 删除,此处不能引用,否则会把节点重建出来。
+ */
+&gpu_opp_table {
+	opp-200000000 { opp-supported-hw = <0xfb 0xffff>; };
+	opp-300000000 { opp-supported-hw = <0xfb 0xffff>; };
+	opp-400000000 { opp-supported-hw = <0xfb 0xffff>; };
+	opp-600000000 { opp-supported-hw = <0xfb 0xffff>; };
+	opp-700000000 { opp-supported-hw = <0xfb 0xffff>; };
+};
+
+/*
+ * NPU IOMMU:rk356x.dtsi 默认 disabled 且无板级开启,librknnrt 2.x 分配
+ * 非连续 NPU 内存(RKNPU_MEM_NON_CONTIGUOUS)依赖 IOMMU,缺失时 rknn_init
+ * 报 failed to malloc npu memory (EINVAL)
+ */
+&rknpu_mmu {
+	status = "okay";
+};
+
+/* 常态档从 MID_HIGH(780M)降为 LOW(324M),负载由 DFI 按 upthreshold 自动升频 */
+&dmc {
+	/* box.dtsi 写死 0(盒子固定频策略),NVR 打开自动调频 */
+	auto-freq-en = <1>;
+	system-status-level = <
+		/*system status         freq level*/
+		SYS_STATUS_NORMAL       DMC_FREQ_LEVEL_LOW
+		SYS_STATUS_REBOOT       DMC_FREQ_LEVEL_HIGH
+		SYS_STATUS_SUSPEND      DMC_FREQ_LEVEL_LOW
+		SYS_STATUS_VIDEO_4K     DMC_FREQ_LEVEL_MID_HIGH
+		SYS_STATUS_VIDEO_4K_10B DMC_FREQ_LEVEL_MID_HIGH
+		SYS_STATUS_BOOST        DMC_FREQ_LEVEL_HIGH
+		SYS_STATUS_ISP          DMC_FREQ_LEVEL_HIGH
+		SYS_STATUS_PERFORMANCE  DMC_FREQ_LEVEL_HIGH
+		SYS_STATUS_DUALVIEW     DMC_FREQ_LEVEL_HIGH
+	>;
+};
+
+/*
+ * 本板无 SATA 座:box-demo dtsi 默认把 sata2 打开,AHCI 会空跑探测并把 combphy2 锁在
+ * SATA 模式。SATA 板的 dts 在 include 本文件之后再显式置 okay。
+ */
+&sata2 {
+	status = "disabled";
+};
+
+/*
+ * rk3568-android.dtsi 里的 RAM vendor storage 是 size=0 的占位,每次开机报
+ * "failed to reserve memory for node 'vendor-storage-rm'"。实际用的是 eMMC 后端
+ * (CONFIG_ROCKCHIP_MMC_VENDOR_STORAGE),/dev/vendor_storage 由它提供。
+ * 报错来自 reserved-memory 的子节点,设备节点又引用它(memory-region),两个一起删。
+ */
+/delete-node/ &vendor_storage;
+/delete-node/ &vendor_storage_rm;
+
+/* 本板无 MIPI 摄像头:ISP 与 CSI PHY 整条链关掉,省去 rkisp 每次开机的 request region / notifier 报错 */
+&rkisp {
+	status = "disabled";
+};
+
+&rkisp_mmu {
+	status = "disabled";
+};
+
+&rkisp_vir0 {
+	status = "disabled";
+};
+
+&csi2_dphy_hw {
+	status = "disabled";
+};
+
+&csi2_dphy0 {
+	status = "disabled";
+};
+
+/* 本板无音量按键(adc-keys 来自 box-demo 机顶盒参考设计):该节点每 100ms
+ * 轮询一次 saradc 通道 0 找按键,实测约每秒 10 次中断,纯属空转。
+ * 关掉后 saradc 无消费者,不再产生周期性唤醒;saradc 控制器本身保持
+ * enabled(留给后续可能的 ADC 用途,无消费者时不产生任何开销)。
+ */
+&adc_keys {
+	status = "disabled";
+};
+
+/* 板上无 MIPI 摄像头和 SPI NAND,禁用消除启动报错 */
+&gc8034 {
+	status = "disabled";
+};
+
+&gc4c33 {
+	status = "disabled";
+};
+
+&sfc {
+	status = "disabled";
+};
+
+/* 红外遥控在 pwm3(官方在 pwm15),自定义键表 */
+&pwm15 {
+	status = "disabled";
+};
+
+&pwm3 {
+	compatible = "rockchip,remotectl-pwm";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm3_pins>;
+	remote_pwm_id = <3>;
+	handle_cpu_id = <1>;
+	remote_support_psci = <0>;
+	status = "okay";
+
+	ir_key1 {
+		rockchip,usercode = <0xfe01>;
+		rockchip,key_table =
+			<0xec	KEY_ENTER>,
+			<0xe6	KEY_ESC>,
+			<0xe9	KEY_UP>,
+			<0xe5	KEY_DOWN>,
+			<0xae	KEY_LEFT>,
+			<0xaf	KEY_RIGHT>,
+			<0xee	KEY_HOME>,
+			<0xe7	KEY_VOLUMEUP>,
+			<0xef	KEY_VOLUMEDOWN>,
+			<0xfc	KEY_SEARCH>,
+			<0xbf	KEY_POWER>,
+			<0xbe	KEY_MUTE>,
+			<0xb3	KEY_MENU>,
+			<0xfe	KEY_0>,
+			<0xb1	KEY_1>,
+			<0xf2	KEY_2>,
+			<0xf3	KEY_3>,
+			<0xb5	KEY_4>,
+			<0xf6	KEY_5>,
+			<0xf7	KEY_6>,
+			<0xb9	KEY_7>,
+			<0xfa	KEY_8>,
+			<0xfb	KEY_9>,
+			<0xbd	KEY_BACKSPACE>,
+			<0xa6	KEY_PREVIOUS>,
+			<0xa5	KEY_PLAYPAUSE>,
+			<0xa7	KEY_NEXT>,
+			<0xbc	77>,	/* settings */
+			<0xb8	215>,	/* @ */
+			<0xff	388>;	/* mouse */
+	};
+};

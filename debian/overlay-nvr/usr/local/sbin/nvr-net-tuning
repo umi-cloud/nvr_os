@@ -1,0 +1,33 @@
+#!/bin/sh
+# 网络收包分流(RPS)——把协议栈处理摊到 IRQ 之外的核。
+#
+# RK3566 的 GMAC 只有一个 RX 队列,中断固定落在 CPU0(/proc/interrupts 里
+# end0 一行只有 CPU0 在涨)。默认不开 RPS 时,从软中断到 TCP 协议栈整条
+# 收包路径都在 CPU0 上跑:实测 NET_RX 软中断 CPU0 1050 万次,其余三核各约
+# 38 万,96% 压在一个核上。4~6 路 RTSP over TCP 全走这条路,CPU0 会先到顶。
+#
+# RPS 让 NAPI 收完包后把后续处理散列到别的核。掩码取 0xe(CPU1~3),把 CPU0
+# 留给硬中断与 NAPI 本身——和 IRQ 抢同一个核反而会互相打断。
+#
+# 只调收包侧。发包侧(XPS)对本机没有价值:NVR 是收多发少,且单发送队列。
+set -eu
+
+MASK=${NVR_RPS_CPUS:-e}
+
+for dev in /sys/class/net/*; do
+	name=${dev##*/}
+	case $name in
+		lo|docker*|veth*|br-*) continue ;;
+	esac
+	# 只处理真实网卡:有 device 符号链接的才是硬件,虚拟接口跳过
+	[ -e "$dev/device" ] || continue
+
+	for q in "$dev"/queues/rx-*; do
+		[ -w "$q/rps_cpus" ] || continue
+		echo "$MASK" > "$q/rps_cpus" || {
+			echo "nvr-net-tuning: 写 $q/rps_cpus 失败" >&2
+			continue
+		}
+		echo "nvr-net-tuning: $name $(basename "$q") rps_cpus=$MASK"
+	done
+done

@@ -1,0 +1,417 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * NVR 板 SATA 版 (UMI-NVR-RK3566-V1.0):8bit DDR3, RTL8211F PHY, SATA 硬盘位,
+ * RK809-5 PMIC, HYM8563 RTC(CR1220 备电)— kernel 6.1
+ * 基于 rk3566-nvr-ddr3-v1.0 全量复用,本文件维护差异:SATA / RK809 电源树 / RTC / 音频
+ * 新板实测参数(RGMII 时延等)如与无 SATA 板有出入,在本文件覆盖
+ */
+
+#include "rk3566-nvr-ddr3-v1.0.dts"
+
+/ {
+	model = "RK3566 NVR DDR3 SATA V1.0 Board";
+	compatible = "rockchip,rk3566-nvr-ddr3-sata-v1.0", "rockchip,rk3566";
+
+	/* 工作灯 WORKING_LEDEN_H_GPIO0_C3 由 box-demo dtsi 的 work-led 覆盖(timer 触发),无需另配 */
+
+	/*
+	 * RK809 codec 声卡(SPK_MINI 8Ω/1.3W 直推 + MIC1 差分)。
+	 * 耳机座 DET 脚原理图仅见净标 HP_DET_L_GPIO3_A1,SoC 侧 GPIO3_A1 悬空
+	 * (疑漏连),故不配 hp-det-gpio;实板确认已连后补一行即可
+	 */
+	rk809_sound: rk809-sound {
+		compatible = "rockchip,multicodecs-card";
+		rockchip,card-name = "rockchip-rk809";
+		rockchip,format = "i2s";
+		rockchip,mclk-fs = <256>;
+		rockchip,cpu = <&i2s1_8ch>;
+		rockchip,codec = <&rk809_codec>;
+		status = "okay";
+	};
+};
+
+/*
+ * SATA 走 sata2/combphy2(原理图 PCIE20_TXP/SATA2_* → SATA 连接器,PCIe REFCLK 悬空;
+ * combphy1 保留给 USB3 host,原理图 USB3_HOST1_SS* 已接 USB3 口)。
+ * 硬盘 12V/5V 直供,无电源开关/活动灯/在位检测,无需额外节点。
+ * box-demo dtsi 已置 okay,此处显式声明以自文档。
+ */
+&sata2 {
+	status = "okay";
+};
+
+/*
+ * ---- RK809 电源树 ----
+ * 无 SATA 板(v1.0)无 I2C PMIC(vdd_logic 为 pwm1 调压、GPU/NPU/DMC 共用固定 950mV 的 vdd_fixed,
+ * 1V8/3V3 等为固定 LDO 占位);本板改用 RK809-5,删除被替代节点后以原 label 重建,
+ * include 链中的既有引用自动解析到 RK809 regulator(遗漏引用会在 dtc 编译时报错)。
+ * vdd_cpu 仍为 PWM0 调压 DC-DC(ETA3499,0.81-1.2V),沿用 box.dtsi 配置不动。
+ */
+/delete-node/ &vdd_logic;
+/delete-node/ &vdd_fixed;
+/delete-node/ &vcc_1v8;
+/delete-node/ &vcc_3v3;
+/delete-node/ &vcc3v3_sd;
+/delete-node/ &vccio_sd;
+
+&i2c0 {
+	status = "okay";
+
+	rk809: pmic@20 {
+		compatible = "rockchip,rk809";
+		reg = <0x20>;
+		/* PMIC_INT_L → GPIO0_A3,PMIC_SLEEP → GPIO0_A2(与官方参考设计一致) */
+		interrupt-parent = <&gpio0>;
+		interrupts = <3 IRQ_TYPE_LEVEL_LOW>;
+
+		pinctrl-names = "default", "pmic-sleep",
+				"pmic-power-off", "pmic-reset";
+		pinctrl-0 = <&pmic_int>;
+		pinctrl-1 = <&soc_slppin_slp>, <&rk817_slppin_slp>;
+		pinctrl-2 = <&soc_slppin_gpio>, <&rk817_slppin_pwrdn>;
+		pinctrl-3 = <&soc_slppin_gpio>, <&rk817_slppin_rst>;
+
+		rockchip,system-power-controller;
+		wakeup-source;
+		#clock-cells = <1>;
+		clock-output-names = "rk808-clkout1", "rk808-clkout2";
+		/* 1: rst regs (default in codes), 0: rst the pmic */
+		pmic-reset-func = <0>;
+		/* not save the PMIC_POWER_EN register in uboot */
+		not-save-power-en = <1>;
+
+		vcc1-supply = <&vcc3v3_sys>;
+		vcc2-supply = <&vcc3v3_sys>;
+		vcc3-supply = <&vcc3v3_sys>;
+		vcc4-supply = <&vcc3v3_sys>;
+		vcc5-supply = <&vcc3v3_sys>;
+		vcc6-supply = <&vcc3v3_sys>;
+		vcc7-supply = <&vcc3v3_sys>;
+		vcc8-supply = <&vcc3v3_sys>;
+		vcc9-supply = <&vcc3v3_sys>;
+
+		pwrkey {
+			status = "okay";
+		};
+
+		pinctrl_rk8xx: pinctrl_rk8xx {
+			gpio-controller;
+			#gpio-cells = <2>;
+
+			rk817_slppin_null: rk817_slppin_null {
+				pins = "gpio_slp";
+				function = "pin_fun0";
+			};
+
+			rk817_slppin_slp: rk817_slppin_slp {
+				pins = "gpio_slp";
+				function = "pin_fun1";
+			};
+
+			rk817_slppin_pwrdn: rk817_slppin_pwrdn {
+				pins = "gpio_slp";
+				function = "pin_fun2";
+			};
+
+			rk817_slppin_rst: rk817_slppin_rst {
+				pins = "gpio_slp";
+				function = "pin_fun3";
+			};
+		};
+
+		regulators {
+			vdd_logic: DCDC_REG1 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <500000>;
+				regulator-max-microvolt = <1350000>;
+				regulator-init-microvolt = <900000>;
+				regulator-ramp-delay = <6001>;
+				regulator-initial-mode = <0x2>;
+				regulator-name = "vdd_logic";
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vdd_gpu: DCDC_REG2 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <500000>;
+				regulator-max-microvolt = <1350000>;
+				regulator-init-microvolt = <900000>;
+				regulator-ramp-delay = <6001>;
+				regulator-initial-mode = <0x2>;
+				regulator-name = "vdd_gpu";
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			/* DDR3 1.5V 由 BUCK3 外部反馈电阻决定,软件不调压 */
+			vcc_ddr: DCDC_REG3 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-initial-mode = <0x2>;
+				regulator-name = "vcc_ddr";
+				regulator-state-mem {
+					regulator-on-in-suspend;
+				};
+			};
+
+			vdd_npu: DCDC_REG4 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <500000>;
+				regulator-max-microvolt = <1350000>;
+				regulator-init-microvolt = <900000>;
+				regulator-ramp-delay = <6001>;
+				regulator-initial-mode = <0x2>;
+				regulator-name = "vdd_npu";
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vcc_1v8: DCDC_REG5 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcc_1v8";
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vdda0v9_image: LDO_REG1 {
+				regulator-boot-on;
+				regulator-always-on;
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+				regulator-name = "vdda0v9_image";
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vdda_0v9: LDO_REG2 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+				regulator-name = "vdda_0v9";
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vdda0v9_pmu: LDO_REG3 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+				regulator-name = "vdda0v9_pmu";
+				regulator-state-mem {
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <900000>;
+				};
+			};
+
+			vccio_acodec: LDO_REG4 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <3000000>;
+				regulator-max-microvolt = <3000000>;
+				regulator-name = "vccio_acodec";
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vccio_sd: LDO_REG5 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-name = "vccio_sd";
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vcc3v3_pmu: LDO_REG6 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-name = "vcc3v3_pmu";
+				regulator-state-mem {
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <3300000>;
+				};
+			};
+
+			vcca_1v8: LDO_REG7 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcca_1v8";
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vcca1v8_pmu: LDO_REG8 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcca1v8_pmu";
+				regulator-state-mem {
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <1800000>;
+				};
+			};
+
+			vcca1v8_image: LDO_REG9 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcca1v8_image";
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vcc_3v3: SWITCH_REG1 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-name = "vcc_3v3";
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vcc3v3_sd: SWITCH_REG2 {
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-name = "vcc3v3_sd";
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+		};
+
+		rk809_codec: codec {
+			#sound-dai-cells = <1>;
+			compatible = "rockchip,rk809-codec", "rockchip,rk817-codec";
+			clocks = <&cru I2S1_MCLKOUT>;
+			clock-names = "mclk";
+			assigned-clocks = <&cru I2S1_MCLKOUT>, <&cru I2S1_MCLK_TX_IOE>;
+			assigned-clock-rates = <12288000>;
+			assigned-clock-parents = <&cru I2S1_MCLKOUT_TX>, <&cru I2S1_MCLKOUT_TX>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&i2s1m0_mclk>;
+			hp-volume = <20>;
+			spk-volume = <3>;
+			mic-in-differential;
+			status = "okay";
+		};
+	};
+};
+
+/* GPU/NPU/DMC 从共用的 vdd_fixed 拆到 RK809 独立 BUCK,DVFS 电压随 OPP 生效 */
+&gpu {
+	mali-supply = <&vdd_gpu>;
+};
+
+&rknpu {
+	rknpu-supply = <&vdd_npu>;
+};
+
+/*
+ * 本板 DDR 定频 1056MHz(loader 终频),关闭内核 dmc 动态调频 —— 实测结论,勿随手打开:
+ *   loader 1056 + dmc 调频 → 3.5s Oops(modprobe 执行到非法指令)
+ *   loader 780  + dmc 调频 → 8.0s Oops(PID 1 在异常向量表撞非法指令)→ panic
+ *   loader 780  + dmc 关闭 → 稳定
+ *   loader 1056 + dmc 关闭 → 稳定,4 核哈希 + 720p 硬编 100s 无异常,memtester 1GB 通过项无失败
+ * 两次崩溃 panic 时 cur_freq 均为 324MHz、崩溃点随机,是内存出错特征;无 SATA 板同一
+ * 配置稳定(其 center-supply 是 950mV 固定 vdd_fixed,dmc 的电压修正对它是空操作;
+ * 本板 center-supply 是 RK809 vdd_logic 900mV,dmc 会真调压)。
+ * 要恢复调频,可按顺序试:vdd_logic/OPP 提到 950mV 对齐无 SATA 板;删 324/528 档只留
+ * 780 以上;或用 ddrbin_tool 调 324 档 DDR3 时序。每一步都要重新跑压力验证。
+ */
+&dmc {
+	status = "disabled";
+	center-supply = <&vdd_logic>;
+};
+
+/*
+ * IO 域按原理图实际供电轨重指(电压档与无 SATA 板一致,不改 GRF 行为,只对齐 regulator 树):
+ * PMUIO2←VCC3V3_PMU(LDO6)、VCCIO1←VCCIO_ACODEC(LDO4 3.0V)、VCCIO3←VCCIO_SD(LDO5)、
+ * VCCIO4←VCCIO_WL=VCCA1V8_PMU 经 0R(LDO8)、VCCIO6←VCCA_1V8(LDO7,RGMII M1 1.8V)
+ */
+&pmu_io_domains {
+	pmuio2-supply = <&vcc3v3_pmu>;
+	vccio1-supply = <&vccio_acodec>;
+	vccio3-supply = <&vccio_sd>;
+	vccio4-supply = <&vcca1v8_pmu>;
+	vccio6-supply = <&vcca_1v8>;
+};
+
+/*
+ * RTC 用 RK809 内置的那颗(rk808-rtc → rtc0,内核 hctosys/systohc 直接对它读写)。
+ * i2c1 @0x51 的 HYM8563 保留节点但禁用:两颗 RTC 同时注册时,RK809 作为 MFD 子设备
+ * 先注册抢走 rtc0,aliases 里写 rtc0 = &hym8563 无效(内核报 /aliases ID 0 not available),
+ * 开机恢复时间的反而是没被当主 RTC 的那颗,徒增歧义。要改回 HYM8563 只需把
+ * status 置 okay 并关掉内核 CONFIG_RTC_DRV_RK808。
+ */
+&i2c1 {
+	status = "okay";
+
+	hym8563: rtc@51 {
+		compatible = "haoyu,hym8563";
+		reg = <0x51>;
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PB5 IRQ_TYPE_LEVEL_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&rtcic_int>;
+		#clock-cells = <0>;
+		clock-output-names = "hym8563";
+		status = "disabled";
+	};
+};
+
+&pinctrl {
+	pmic {
+		pmic_int: pmic_int {
+			rockchip,pins =
+				<0 RK_PA3 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+
+		soc_slppin_gpio: soc_slppin_gpio {
+			rockchip,pins =
+				<0 RK_PA2 RK_FUNC_GPIO &pcfg_output_low>;
+		};
+
+		soc_slppin_slp: soc_slppin_slp {
+			rockchip,pins =
+				<0 RK_PA2 1 &pcfg_pull_none>;
+		};
+
+		soc_slppin_rst: soc_slppin_rst {
+			rockchip,pins =
+				<0 RK_PA2 2 &pcfg_pull_none>;
+		};
+	};
+
+	rtcic {
+		rtcic_int: rtcic_int {
+			rockchip,pins =
+				<0 RK_PB5 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+};

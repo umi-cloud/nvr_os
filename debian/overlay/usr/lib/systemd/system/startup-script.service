@@ -1,0 +1,8 @@
+[Unit]
+Description=Power on auto run
+
+[Service]
+ExecStart=/usr/sbin/StartupScript.sh
+
+[Install]
+WantedBy=multi-user.target

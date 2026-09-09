@@ -1,0 +1,4 @@
+09:06:12 	Upgrade Tool v1.1
+
+09:06:12 	Current process in /data/Projects/nvr/nvr-os/device/rockchip/rk1808/rk1808_compute_stick_tool/x64_release
+09:06:12 	Using /data/Projects/nvr/nvr-os/device/rockchip/rk1808/rk1808_compute_stick_tool/x64_release/config.ini

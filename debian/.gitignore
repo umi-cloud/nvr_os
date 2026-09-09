@@ -1,0 +1,5 @@
+overlay/usr/lib/modules/
+binary/
+bookworm-base*/
+bookworm-base-arm64.tar.gz
+linaro-rootfs.img

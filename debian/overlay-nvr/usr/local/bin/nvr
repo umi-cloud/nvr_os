@@ -1,0 +1,60 @@
+#!/bin/sh
+# nvr 引导器 —— 把出厂基线放到可写目录,并从那里启动主程序。
+#
+# 为什么不直接 exec rootfs 里的基线:nvr-edge 把自己的可执行文件路径当作
+# "systemd 固定启动路径"(app.go 里 AgentInstallPath 默认取 os.Executable()),
+# 自更新切槽后会把活动槽二进制原子复制回这个路径(updater.go 的 activate)。
+# 若它指向 /usr/local/lib/nvr/nvr-edge,ProtectSystem=full 下 /usr 只读 → 复制失败,
+# 而 Install() 对这一步的失败是**整体回滚**:把 current 切回旧槽、擦掉刚下好的新槽、
+# 记 fail。下载/sha256/健康自检全过,只在最后一步倒回,日志看着像更新完了。
+# 净效果是裸机首次 OTA 必然失败且永远卡在出厂版本,故运行体必须落在可写分区。
+#
+# 反过来,从 <work-dir>/bin 启动后 activate 能正常写入;万一某次没同步上,
+# 下次启动 RecoverBoot 会再 activate 一遍并请求重启,自愈。
+# 也因此这里不再做"槽优先"选择 —— 哪个槽是活动槽由 updater 的 state.json 说了算
+# (回滚也走它),引导器只负责保证固定路径上有一个能跑的二进制。
+set -e
+
+BASELINE=/usr/local/lib/nvr/nvr-edge
+WORK_DIR=${NVR_WORK_DIR:-/userdata/nvr}
+BIN=$WORK_DIR/bin/nvr-edge
+
+# 启动参数在此组装,不由 unit 展开:systemd 的 ${VAR} 空值会整个消失,
+# 未绑定设备(nvr.env 身份留空)会退化成 `--agent-id --device-sn`,
+# Go flag 把后一个开关当成前一个的值,agent-id 被静默设为 "--device-sn"。
+# device-sn 未注入时回落设备树序列号(硬件唯一,免产线逐台写入)。
+if [ -z "$NVR_DEVICE_SN" ] && [ -r /proc/device-tree/serial-number ]; then
+	NVR_DEVICE_SN=$(tr -d '\0' < /proc/device-tree/serial-number)
+fi
+
+# work-dir 在首启的全新 userdata 上还不存在,必须由本脚本建。unit 的
+# WorkingDirectory 会在 exec 前 chdir,目录缺失时直接 200/CHDIR 起不来,
+# 连 ExecStartPre 也救不了(同样受 WorkingDirectory 约束),故那里用 - 前缀容错,
+# 真正的落点在这里保证。
+# 不能写成 `mkdir -p X && cd X`:set -e 对 && 列表中非末位的失败命令有豁免,
+# mkdir 失败时 cd 被跳过而脚本照常往下跑,最终带着错误的工作目录 exec
+mkdir -p "$WORK_DIR/bin"
+cd "$WORK_DIR"
+
+# 运行体缺失(首启、userdata 被格式化、或自更新写坏后被人工删除)时,从出厂基线补一份。
+# 已存在则不动 —— 自更新同步过来的版本优先于基线。要强制回到出厂版本,
+# 删掉它并清掉 data/selfupdate/nvr-edge/state.json 再重启。
+# 判空不能只看 -x:0 字节文件同样满足 -x,exec 它会被当成空脚本、退出码 0,
+# systemd 视作正常退出并无限重启一个空程序。自更新写到一半断电就可能留下这种残骸。
+if [ ! -s "$BIN" ] || [ ! -x "$BIN" ]; then
+	# 拆开写(见上):&& 串联会让 install 的失败被 set -e 豁免,一路走到 exec
+	# 才报"文件不存在",掩盖真正的原因。先落 .tmp 再 mv,避免复制中途断电留下半个文件。
+	install -m 755 "$BASELINE" "$BIN.tmp"
+	# 落盘后再改名:ext4 默认延迟分配,数据还在 page cache 时断电,
+	# rename 过的文件会以长度 0 存活下来 —— 现场见过的 0 字节运行体正是这样来的
+	sync "$BIN.tmp" 2>/dev/null || sync
+	mv "$BIN.tmp" "$BIN"
+fi
+
+set -- --work-dir "$WORK_DIR" \
+	--cache-dir "${NVR_CACHE_DIR:-/userdata/nvr/cache}" \
+	--agent-id "${NVR_AGENT_ID}" \
+	--device-sn "${NVR_DEVICE_SN}" \
+	"$@"
+
+exec "$BIN" "$@"

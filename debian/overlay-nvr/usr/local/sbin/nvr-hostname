@@ -1,0 +1,15 @@
+#!/bin/sh
+# 主机名唯一化:UMI-<SN 后 6 位>(如 UMI-0A1B2C)。SN 取自设备树 /serial-number(u-boot 优先用 vendor 区
+# 写入的 SN,没写时回落芯片 cpuid)。两块板都叫 nvr-rk3566 时路由器按主机名派同一个
+# 租约,两块板抢同一个 IP,实际踩过。每次开机幂等执行,产线写入 SN 后重启即生效。
+set -e
+sn=$(tr -d '\0' < /proc/device-tree/serial-number 2>/dev/null || true)
+[ -n "$sn" ] || exit 0
+name="UMI-$(printf '%s' "$sn" | tail -c 6 | tr 'a-z' 'A-Z')"
+cur=$(cat /etc/hostname 2>/dev/null || true)
+if [ "$cur" != "$name" ]; then
+	printf '%s\n' "$name" > /etc/hostname
+	sed -i "s/^127\.0\.1\.1\s.*/127.0.1.1\t$name/" /etc/hosts 2>/dev/null || true
+	grep -q "^127.0.1.1" /etc/hosts 2>/dev/null || printf '127.0.1.1\t%s\n' "$name" >> /etc/hosts
+fi
+hostname "$name"

@@ -1,0 +1,1 @@
+BoardConfig-rk3566-nvr-ddr3-sata-v1.0.mk

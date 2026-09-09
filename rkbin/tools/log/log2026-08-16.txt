@@ -1,0 +1,8 @@
+20:38:12 	Error:RKU_Write failed, err=-1
+20:38:12 	Error: RKU_ReadFlashInfo failed, err=-3
+20:38:19 	Error:RKU_Write failed, err=-1
+20:38:19 	Error: RKU_ReadFlashID failed, err=-3
+20:38:30 	Upgrade Tool v1.54
+
+20:38:30 	Current process in /data/Projects/nvr/nvr-os/rkbin/tools
+20:38:30 	Using /data/Projects/nvr/nvr-os/rkbin/tools/config.ini

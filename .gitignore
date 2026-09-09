@@ -1,8 +1,43 @@
-# 外层仓库采用白名单:默认忽略一切,只跟踪明确列出的定制层内容
-# (SDK 本体由 .repo 子仓库管理,各自的定制改动在其 nvr-custom 分支)
-/*
+# nvr-os 单仓忽略规则
+#
+# 本仓由 repo 多仓库结构收敛而来(2026-09-09):各子仓的 .git 已拆除,
+# 独立历史保存在 /data/backup/nvr-os-subrepos-20260909/ 的 bundle 里。
+# 各子目录自带的 .gitignore(kernel/、u-boot/、buildroot/ 等)仍然生效,
+# 内核与 u-boot 的编译产物由它们自己排除,这里只列它们管不到的部分。
 
-!/.gitignore
-!/CLAUDE.md
-!/docker/
-!/umlogobg.svg
+# ---- repo 工具元数据(已失效,Gerrit 无账号不可 sync)----
+/.repo/
+
+# ---- 构建产物 ----
+/rockdev/
+/buildroot/output/
+/buildroot/dl/
+/debian/binary/
+/debian/linaro-rootfs.img
+/debian/*.ext4
+/br.log
+/kernel/boot.img
+/kernel/vmlinux
+/kernel/vmlinux.o
+
+# ---- 构建缓存(可重新生成,体积大)----
+/debian/bookworm-base-arm64.tar.gz
+
+# ---- 体积过大且可另行获取的二进制 ----
+# 说明见 README「最小可构建集」一节:克隆后需要补齐 prebuilts/gcc 与
+# debian/overlay-firmware 才能完整构建 rootfs 与内核。
+/prebuilts/gcc/
+/debian/overlay-firmware/
+/external/rknpu2/
+/external/rknn-toolkit2/
+/external/security/
+/docs/Common/
+/tools/windows/
+
+# ---- 编辑器与临时文件 ----
+*.swp
+*~
+.DS_Store
+
+# 构建中间目录
+/.rootfs/

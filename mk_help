@@ -1,0 +1,23 @@
+
+
+  export RK_ROOTFS_SYSTEM=debian
+
+  #  ./build.sh recovery
+
+  ./build.sh uboot
+  
+  ./build.sh kernel
+  
+  ./build.sh debian
+
+  ./build.sh updateimg
+
+  ### rockdev/update.img
+
+
+#  export RK_ROOTFS_SYSTEM=buildroot
+
+#cp -f /mnt/sdb/RK_BOX/rk3566_linux/buildroot/output/rockchip_rk3566/build/rkwifibt-1.0.0/realtek/bluetooth_uart_driver/hci_uart.ko  ./debian/binary/system/lib/modules/hci_uart.ko 
+
+
+
