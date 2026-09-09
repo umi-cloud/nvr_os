@@ -120,6 +120,11 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   `--autologin root` 免密进 shell,构建脚本已 sed 掉)。`systemctl reboot loader` 可远程进烧写模式,
   不用按 recovery 键
 - **设备身份(vendor storage,eMMC 末尾厂商区)**:`nvr-provision <SN> <MAC1> <MAC2>` 写入,`show` 回读。
+  ⚠ **写入命令的退出码不可信**:原厂 `external/rktoolkit/vendor_storage.c` 的 main() 丢掉了
+  `vendor_storage_write()` 的返回值(第 447 行调用后直接 `return 0`),`vendor_storage -w` 无论成败
+  都退出 0,靠 `set -e` 挡不住。`nvr-provision` 因此在写完后**回读逐字段比对**,不一致即退出非零,
+  产线工装应据退出码拦机。样机上实测过这个坑:MAC 有值而 SN 一直是空的,旧版脚本照样打印
+  「已写入」并退出 0(`/proc/device-tree/serial-number` 那时回落到 SoC 芯片 ID)。
   SN 16 位、`UMNVR3566` 开头;u-boot 下次启动把 SN 注入 `/serial-number`(nvr-edge/vsync 的设备 SN),
   MAC1 注入 gmac1(dts 别名 `ethernet0`,因此网口名是 **end0**);MAC2 给 USB 网口(r8152 无 EEPROM,
   开机随机):`nvr-usb-eth-link` 按 vendor 区生成 `/etc/systemd/network/20-usb-eth.link`,由 udev 在网卡
@@ -145,6 +150,13 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   NVR 板取 0xc20b(LED0 常亮 link,LED1/LED2 收发闪烁),两颗灯都闪、没有常亮则改回 0xc160
 - **ssh host key 首启生成**:镜像不带 host key,`nvr-ssh-hostkeys.service` 首启 `ssh-keygen -A`,每台设备
   各不相同。代价是每刷一次固件 known_hosts 都会报 key 变化,开发期用 `-o StrictHostKeyChecking=no` 即可
+- **machine-id 出厂为空**(构建期 `: > /etc/machine-id`,`/var/lib/dbus/machine-id` 软链过去):
+  0 字节是 systemd 约定的首启标记,PID 1 开机自行生成。**不清空则全部设备共用一个 id**,而
+  systemd-networkd 的 DUID 默认由它派生(实测清空前后 `DUID-EN/Vendor` 确实随之改变),
+  DHCPv6 靠 DUID 认设备会撞车,D-Bus 与 journald 的机器身份也重复。
+  连带必须 `systemctl mask systemd-firstboot.service`:空 machine-id 会让它的
+  `ConditionFirstBoot=yes` 成立,而它的命令是 `--prompt-locale --prompt-timezone
+  --prompt-root-password`,会在串口上等人输入、卡死启动
 - **系统自愈与收敛**(overlay-nvr/etc/systemd):PID 1 喂硬件看门狗(`RuntimeWatchdogSec=30s`,内核或
   PID 1 卡死 30 秒自动复位;nvr-edge 自己的喂狗仍待做);journald 封顶 64M;apt-daily/e2scrub/dpkg-db-backup
   定时器已 mask,adbd 已关(USB 是 host 模式);根分区 noatime。板上常驻服务 13 个,启动 8 秒

@@ -360,6 +360,19 @@ systemctl disable adbd.service e2scrub_reap.service 2>/dev/null || true
 rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
 systemctl enable nvr-ssh-hostkeys.service
 
+# machine-id:同 ssh host key,是每台设备必须唯一的身份,不能随镜像出厂。
+# 截成 0 字节是 systemd 约定的「首启」标记,PID 1 开机自行生成并落盘。
+# 不清空的后果:全部设备共用一个 machine-id,而 systemd-networkd 的 DUID 默认
+# 由它派生(实测板上为 DUID-EN/Vendor:0000ab11...),DHCPv6 靠 DUID 认设备会直接
+# 撞车;D-Bus 机器标识、journald 上报的机器身份也一并重复。
+: > /etc/machine-id
+# dbus 的那份改为软链,否则它会留着镜像里的旧值,与 /etc/machine-id 不一致
+ln -sf /etc/machine-id /var/lib/dbus/machine-id
+# 空 machine-id 会让 ConditionFirstBoot=yes 成立,而 systemd-firstboot 的命令是
+# --prompt-locale --prompt-timezone --prompt-root-password,会在串口上等人输入、
+# 卡住启动。本镜像这三项都已在构建期定好,该单元必须 mask。
+systemctl mask systemd-firstboot.service
+
 # USB 网口 MAC:按 vendor 区第二个 MAC 生成 .link,由 udev 开机套用(不在运行中改 MAC)
 if [ -f /lib/systemd/system/nvr-usb-eth-link.service ]; then
 	systemctl enable nvr-usb-eth-link.service

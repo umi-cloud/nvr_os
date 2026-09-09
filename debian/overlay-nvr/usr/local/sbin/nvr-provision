@@ -1,15 +1,38 @@
 #!/bin/sh
 # 产线写入设备身份:SN(16 位字母数字,UMNVR3566 开头)与两个网口 MAC,落到 eMMC vendor 区。
-#   nvr-provision <SN> <MAC-gmac1> <MAC-usb>       写入并回读
+#   nvr-provision <SN> <MAC-gmac1> <MAC-usb>       写入、回读校验
 #   nvr-provision show                              只回读
-# u-boot 下次启动读取:SN → /serial-number(nvr-edge/vsync 的设备 SN,主机名 nvr-<后 6 位>),
+# u-boot 下次启动读取:SN → /serial-number(nvr-edge/vsync 的设备 SN,主机名 UMI-<后 6 位>),
 # MAC1 → gmac1(end0),MAC2 → USB 网口(udev 按 .link 在开机套用)。写完需重启生效。
+#
+# 为什么写完必须回读比对:原厂 external/rktoolkit/vendor_storage.c 的 main() 丢掉了
+# vendor_storage_write() 的返回值(第 447 行调用后直接 return 0),所以 `vendor_storage -w`
+# **无论成败都退出 0** —— /dev/vendor_storage 打不开、ioctl 失败,命令行上一律看不出来。
+# 靠 set -e 挡不住,只能自己读回来逐字段比。校验不过时退出非零,产线工装据此拦下该机。
 set -e
-show() {
-	echo "SN : $(vendor_storage -r VENDOR_SN_ID -t string 2>/dev/null | grep -aoE 'UMNVR[0-9A-Za-z]+' | head -1)"
-	hex=$(vendor_storage -r VENDOR_LAN_MAC_ID -t hex 2>/dev/null | grep -aE '^ *0000-000f:' | sed 's/^ *0000-000f: *//' | tr -d ' \r')
-	[ ${#hex} -ge 24 ] && echo "MAC: $(echo $hex | cut -c1-12 | sed 's/../&:/g;s/:$//')  $(echo $hex | cut -c13-24 | sed 's/../&:/g;s/:$//')"
+
+read_sn() {
+	vendor_storage -r VENDOR_SN_ID -t string 2>/dev/null |
+		grep -aoE 'UMNVR[0-9A-Za-z]+' | head -1
 }
+
+# 回读 12 字节 MAC 区,输出 24 位小写 hex(两个 MAC 首尾相接)
+read_mac_hex() {
+	vendor_storage -r VENDOR_LAN_MAC_ID -t hex 2>/dev/null |
+		grep -aE '^ *0000-000f:' | sed 's/^ *0000-000f: *//' |
+		tr -d ' \r' | tr 'A-F' 'a-f' | cut -c1-24
+}
+
+fmt_mac() { echo "$1" | sed 's/../&:/g;s/:$//'; }
+
+show() {
+	echo "SN : $(read_sn)"
+	hex=$(read_mac_hex)
+	[ ${#hex} -ge 24 ] &&
+		echo "MAC: $(fmt_mac "$(echo "$hex" | cut -c1-12)")  $(fmt_mac "$(echo "$hex" | cut -c13-24)")"
+	return 0
+}
+
 [ "$1" = show ] && { show; exit 0; }
 [ $# -eq 3 ] || { echo "用法: nvr-provision <SN 16位> <MAC-gmac1> <MAC-usb> | show" >&2; exit 2; }
 sn=$1; m1=$(echo "$2" | tr 'A-F' 'a-f'); m2=$(echo "$3" | tr 'A-F' 'a-f')
@@ -21,9 +44,26 @@ for m in "$m1" "$m2"; do
 done
 [ "$m1" != "$m2" ] || { echo "两个 MAC 不能相同" >&2; exit 1; }
 hex="$(echo "$m1$m2" | tr -d ':')"
+
 vendor_storage -w VENDOR_SN_ID -t string -i "$sn" >/dev/null
 vendor_storage -w VENDOR_LAN_MAC_ID -t hex -i "$hex" >/dev/null
 sync
+
+# 回读校验(见文件头):写入命令的退出码不可信,以实际读回的内容为准
+got_sn=$(read_sn || true)
+got_hex=$(read_mac_hex || true)
+bad=0
+[ "$got_sn" = "$sn" ] || {
+	echo "校验失败 SN : 期望 $sn,回读 ${got_sn:-<空>}" >&2; bad=1
+}
+[ "$got_hex" = "$hex" ] || {
+	echo "校验失败 MAC: 期望 $hex,回读 ${got_hex:-<空>}" >&2; bad=1
+}
+[ "$bad" = 0 ] || {
+	echo "vendor 区写入未生效,本机不可放行" >&2
+	exit 1
+}
+
 # USB 网口的 MAC 由 udev 按 .link 在开机时套上,这里立即生成文件,下次开机生效
 /usr/local/sbin/nvr-usb-eth-link
-echo "已写入,重启后生效:"; show
+echo "写入并校验通过,重启后生效:"; show
