@@ -17,10 +17,11 @@ SIG_BIN="data2sign.bin"
 SIG_UBOOT="${FIT_DIR}/uboot.data2sign"
 SIG_BOOT="${FIT_DIR}/boot.data2sign"
 SIG_RECOVERY="${FIT_DIR}/recovery.data2sign"
+SIG_CFG_DIR="${FIT_DIR}/fit_signcfg"
+SIG_CONFIG="${SIG_CFG_DIR}/sign.readonly_config"
+MINIALL_INI="${SIG_CFG_DIR}/MINIALL.ini"
 # offs
-OFFS_DATA="0x1000"
-# file
-CHIP_FILE="arch/arm/lib/.asm-offsets.s.cmd"
+OFFS_DATA="0x1200"
 # placeholder address
 FDT_ADDR_PLACEHOLDER="0xffffff00"
 KERNEL_ADDR_PLACEHOLDER="0xffffff01"
@@ -35,6 +36,9 @@ KEY_DIR="keys/"
 RSA_PRI_KEY="keys/dev.key"
 RSA_PUB_KEY="keys/dev.pubkey"
 RSA_CRT_KEY="keys/dev.crt"
+LEGACY_RSA_PRI_KEY="legacy_keys/dev.key"
+LEGACY_RSA_PUB_KEY="legacy_keys/dev.pubkey"
+LEGACY_RSA_CRT_KEY="legacy_keys/dev.crt"
 SIGNATURE_KEY_NODE="/signature/key-dev"
 SPL_DTB="spl/u-boot-spl.dtb"
 UBOOT_DTB="u-boot.dtb"
@@ -65,6 +69,7 @@ function help()
 	echo "    --ini-loader               <loader ini file>"
 	echo "    --ini-trust                <trust ini file>"
 	echo "    --no-check"
+	echo "    --no-sign"
 	echo "    --spl-new"
 	echo
 }
@@ -96,6 +101,19 @@ function check_its()
 	done
 }
 
+function check_rsa_algo()
+{
+	if grep -q '^CONFIG_FIT_ENABLE_RSA4096_SUPPORT=y' .config ; then
+		rsa_algo="rsa4096"
+	else
+		rsa_algo="rsa2048"
+	fi
+	if ! grep -qr ${rsa_algo} $1 ; then
+		echo "ERROR: Wrong rsa_algo in its file. It should be ${rsa_algo}."
+		exit 1
+	fi
+}
+
 function check_rsa_keys()
 {
 	if [ ! -f ${RSA_PRI_KEY} ]; then
@@ -113,7 +131,7 @@ function check_rsa_keys()
 function validate_arg()
 {
 	case $1 in
-		--no-check|--spl-new|--burn-key-hash)
+		--no-check|--no-sign|--spl-new|--burn-key-hash)
 			shift=1
 			;;
 		--ini-trust|--ini-loader|--rollback-index-boot|--rollback-index-recovery|--rollback-index-uboot|--boot_img|--recovery_img|--version-uboot|--version-boot|--version-recovery|--chip)
@@ -131,6 +149,10 @@ function fit_process_args()
 	if [ $# -eq 0 ]; then
 		help
 		exit 0
+	fi
+
+	if grep -q '^CONFIG_FIT_SIGNATURE=y' .config ; then
+		ARG_SIGN="y"
 	fi
 
 	while [ $# -gt 0 ]; do
@@ -159,6 +181,11 @@ function fit_process_args()
 				ARG_NO_CHECK="y"
 				shift 1
 				;;
+			--no-sign)
+				ARG_NO_SIGN="y"
+				ARG_SIGN="n"
+				shift 1
+				;;
 			--ini-trust)    # Assign trust ini file
 				ARG_INI_TRUST=$2
 				shift 2
@@ -169,6 +196,11 @@ function fit_process_args()
 				;;
 			--spl-new)      # Use current build u-boot-spl.bin to pack loader
 				ARG_SPL_NEW="y"
+				# Whether aarch32 or not, spl only support 64 bits version.
+				if grep -q '^CONFIG_ARM64_BOOT_AARCH32=y' .config ; then
+					echo "ERROR: SPL doesn't support 32-bit. Please build 64-bit defconfig and update u-boot-spl.bin to rkbin first."
+					exit 1
+				fi
 				shift 1
 				;;
 			--rollback-index-boot)
@@ -205,25 +237,29 @@ function fit_process_args()
 				ARG_BURN_KEY_HASH="y"
 				shift 1
 				;;
+			--spl-fwver)
+				ARG_FIT_FWVER="${ARG_FIT_FWVER} --spl-fwver $2"
+				shift 2
+				;;
+			--fwver)
+				ARG_FIT_FWVER="${ARG_FIT_FWVER} --fwver $2"
+				shift 2
+				;;
 			*)
 				help
 				exit 1
 				;;
 		esac
 	done
-
-	if grep -q '^CONFIG_FIT_SIGNATURE=y' .config ; then
-		ARG_SIGN="y"
-	fi
 }
 
 function fit_raw_compile()
 {
 	# Verified-boot: should rebuild code but don't need to repack images.
 	if [ "${ARG_SIGN}" == "y" ]; then
-		./make.sh --raw-compile
+		./make.sh --raw-compile ${ARG_FIT_FWVER}
 	fi
-	rm ${FIT_DIR} -rf && mkdir -p ${FIT_DIR}
+	rm ${FIT_DIR} -rf && mkdir -p ${FIT_DIR} && mkdir -p ${SIG_CFG_DIR}
 }
 
 function fit_gen_uboot_itb()
@@ -378,7 +414,9 @@ function fit_gen_boot_itb()
 	else
 		check_rsa_keys
 
-		if ! grep -q '^CONFIG_FIT_SIGNATURE=y' .config ; then
+		check_rsa_algo ${ITS_BOOT}
+
+		if [ "${ARG_SIGN}" != "y" ]; then
 			echo "ERROR: CONFIG_FIT_SIGNATURE is disabled"
 			exit 1
 		fi
@@ -396,16 +434,12 @@ function fit_gen_boot_itb()
 		fi
 
 		# fixup
-		COMMON_FILE=`sed -n "/_common.h/p" ${CHIP_FILE} | awk '{ print $1 }'`
-		FDT_ADDR_R=`awk /fdt_addr_r/         ${COMMON_FILE} | awk -F '=' '{ print $2 }' | awk -F '\\' '{ print $1 }'`
-		KERNEL_ADDR_R=`awk /kernel_addr_r/   ${COMMON_FILE} | awk -F '=' '{ print $2 }' | awk -F '\\' '{ print $1 }'`
-		RMADISK_ADDR_R=`awk /ramdisk_addr_r/ ${COMMON_FILE} | awk -F '=' '{ print $2 }' | awk -F '\\' '{ print $1 }'`
+		FDT_ADDR_R=`strings env/built-in.o | grep 'fdt_addr_r=' | awk -F "=" '{ print $2 }'`
+		KERNEL_ADDR_R=`strings env/built-in.o | grep 'kernel_addr_r=' | awk -F "=" '{ print $2 }'`
+		RMADISK_ADDR_R=`strings env/built-in.o | grep 'ramdisk_addr_r=' | awk -F "=" '{ print $2 }'`
 		sed -i "s/${FDT_ADDR_PLACEHOLDER}/${FDT_ADDR_R}/g"         ${ITS_BOOT}
 		sed -i "s/${KERNEL_ADDR_PLACEHOLDER}/${KERNEL_ADDR_R}/g"   ${ITS_BOOT}
 		sed -i "s/${RAMDISK_ADDR_PLACEHOLDER}/${RMADISK_ADDR_R}/g" ${ITS_BOOT}
-		if grep -q '^CONFIG_ARM64=y' .config ; then
-			sed -i 's/arch = "arm";/arch = "arm64";/g' ${ITS_BOOT}
-		fi
 
 		if [ "${ARG_ROLLBACK_PROTECT}" == "y" ]; then
 			VERSION=`grep 'rollback-index' ${ITS_BOOT} | awk -F '=' '{ printf $2 }' | tr -d ' '`
@@ -464,7 +498,9 @@ function fit_gen_recovery_itb()
 	else
 		check_rsa_keys
 
-		if ! grep -q '^CONFIG_FIT_SIGNATURE=y' .config ; then
+		check_rsa_algo ${ITS_RECOVERY}
+
+		if [ "${ARG_SIGN}" != "y" ]; then
 			echo "ERROR: CONFIG_FIT_SIGNATURE is disabled"
 			exit 1
 		fi
@@ -482,16 +518,12 @@ function fit_gen_recovery_itb()
 		fi
 
 		# fixup
-		COMMON_FILE=`sed -n "/_common.h/p" ${CHIP_FILE} | awk '{ print $1 }'`
-		FDT_ADDR_R=`awk /fdt_addr_r/         ${COMMON_FILE} | awk -F '=' '{ print $2 }' | awk -F '\\' '{ print $1 }'`
-		KERNEL_ADDR_R=`awk /kernel_addr_r/   ${COMMON_FILE} | awk -F '=' '{ print $2 }' | awk -F '\\' '{ print $1 }'`
-		RMADISK_ADDR_R=`awk /ramdisk_addr_r/ ${COMMON_FILE} | awk -F '=' '{ print $2 }' | awk -F '\\' '{ print $1 }'`
+		FDT_ADDR_R=`strings env/built-in.o | grep 'fdt_addr_r=' | awk -F "=" '{ print $2 }'`
+		KERNEL_ADDR_R=`strings env/built-in.o | grep 'kernel_addr_r=' | awk -F "=" '{ print $2 }'`
+		RMADISK_ADDR_R=`strings env/built-in.o | grep 'ramdisk_addr_r=' | awk -F "=" '{ print $2 }'`
 		sed -i "s/${FDT_ADDR_PLACEHOLDER}/${FDT_ADDR_R}/g"         ${ITS_RECOVERY}
 		sed -i "s/${KERNEL_ADDR_PLACEHOLDER}/${KERNEL_ADDR_R}/g"   ${ITS_RECOVERY}
 		sed -i "s/${RAMDISK_ADDR_PLACEHOLDER}/${RMADISK_ADDR_R}/g" ${ITS_RECOVERY}
-		if grep -q '^CONFIG_ARM64=y' .config ; then
-			sed -i 's/arch = "arm";/arch = "arm64";/g' ${ITS_RECOVERY}
-		fi
 
 		if [ "${ARG_ROLLBACK_PROTECT}" == "y" ]; then
 			VERSION=`grep 'rollback-index' ${ITS_RECOVERY} | awk -F '=' '{ printf $2 }' | tr -d ' '`
@@ -589,9 +621,14 @@ function fit_gen_recovery_img()
 
 function fit_gen_loader()
 {
-	if grep -Eq '^CONFIG_FIT_SIGNATURE=y' .config ; then
+	if [ "${ARG_SIGN}" == "y" ]; then
 		${RK_SIGN_TOOL} cc --chip ${ARG_CHIP: 2: 6}
-		${RK_SIGN_TOOL} lk --key ${RSA_PRI_KEY} --pubkey ${RSA_PUB_KEY}
+		if grep -q '^CONFIG_SPL_REVOKE_PUB_KEY=y' .config ; then
+			${RK_SIGN_TOOL} lk --key ${LEGACY_RSA_PRI_KEY} --pubkey ${LEGACY_RSA_PUB_KEY}
+			${RK_SIGN_TOOL} ss --flag=0x80
+		else
+			${RK_SIGN_TOOL} lk --key ${RSA_PRI_KEY} --pubkey ${RSA_PUB_KEY}
+		fi
 		if ls *loader*.bin >/dev/null 2>&1 ; then
 			${RK_SIGN_TOOL} sl --loader *loader*.bin
 		fi
@@ -682,7 +719,7 @@ function fit_msg_loader()
 		LOADER=`ls *idblock*.img`
 	fi
 
-	if grep -q '^CONFIG_FIT_SIGNATURE=y' .config ; then
+	if [ "${ARG_SIGN}" == "y" ]; then
 		echo "Image(signed): ${LOADER} (with spl, ddr...) is ready"
 	else
 		echo "Image(no-signed): ${LOADER} (with spl, ddr...) is ready"
@@ -699,9 +736,51 @@ function fit_msg_u_boot_loader()
 		LOADER=`ls *idblock*.img`
 	fi
 
-	if grep -q '^CONFIG_FIT_SIGNATURE=y' .config ; then
+	if [ "${ARG_SIGN}" == "y" ]; then
 		echo "Image(signed): ${LOADER} (with u-boot, ddr...) is ready"
 	else
 		echo "Image(no-signed): ${LOADER} (with u-boot, ddr...) is ready"
+	fi
+}
+
+function fit_signcfg_export()
+{
+	if [ "${ARG_NO_SIGN}" == "y" ]; then
+		if ls *loader*.bin >/dev/null 2>&1 ; then
+			LOADER=`ls *loader*.bin`
+		elif ls *download*.bin >/dev/null 2>&1 ; then
+			LOADER=`ls *download*.bin`
+		else
+			echo "ERROR: No loader found"
+			exit 1
+		fi
+		cp ${ARG_INI_LOADER} ${MINIALL_INI}
+		cp .config ${SIG_CONFIG}
+
+		mkdir -p ${SIG_CFG_DIR}/test_images/
+		cp uboot.img ${SIG_CFG_DIR}/test_images/
+		cp ${LOADER} ${SIG_CFG_DIR}/test_images/
+		tar zcvf ${SIG_CFG_DIR}/test_images.tar.gz ${SIG_CFG_DIR}/test_images >/dev/null 2>&1
+		rm -rf ${SIG_CFG_DIR}/test_images/
+
+		FDT_ADDR_R=`strings env/built-in.o | grep 'fdt_addr_r=' | awk -F "=" '{ print $2 }'`
+		KERNEL_ADDR_R=`strings env/built-in.o | grep 'kernel_addr_r=' | awk -F "=" '{ print $2 }'`
+		RMADISK_ADDR_R=`strings env/built-in.o | grep 'ramdisk_addr_r=' | awk -F "=" '{ print $2 }'`
+		echo "fdt_addr_r=${FDT_ADDR_R}" >> ${SIG_CONFIG}
+		echo "kernel_addr_r=${KERNEL_ADDR_R}" >> ${SIG_CONFIG}
+		echo "ramdisk_addr_r=${RMADISK_ADDR_R}" >> ${SIG_CONFIG}
+
+		CSUM=`sha256sum u-boot-nodtb.bin  | awk '{ print $1 }'`
+		echo "uboot_sha256sum=${CSUM}" >> ${SIG_CONFIG}
+		CSUM=`sha256sum spl/u-boot-spl-nodtb.bin  | awk '{ print $1 }'`
+		echo "spl_sha256sum=${CSUM}" >> ${SIG_CONFIG}
+		SIZE=`ls -l  spl/u-boot-spl-nodtb.bin | awk '{ print $5 }'`
+		echo "spl_size=${SIZE}" >> ${SIG_CONFIG}
+
+		BUILD_MAIL=`git config --get user.email`
+		BUILD_HOST=`hostname`
+		BUILD_USER=${USER}
+		BUILD_DATE=`date`
+		echo "BUILD: ${BUILD_MAIL} # ${BUILD_USER}@${BUILD_HOST} # ${BUILD_DATE}" >> ${SIG_CONFIG}
 	fi
 }

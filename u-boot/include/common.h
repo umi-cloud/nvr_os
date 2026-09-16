@@ -30,6 +30,8 @@ typedef volatile unsigned char	vu_char;
 #include <linux/string.h>
 #include <linux/stringify.h>
 #include <asm/ptrace.h>
+#include <asm/uspinlock.h>
+#include <smp.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <linux/kernel.h>
@@ -536,8 +538,6 @@ int	is_core_valid (unsigned int);
  * version (which does nothing) will be used.
  */
 int arch_cpu_init(void);
-
-int arch_fpga_init(void);
 
 void s_init(void);
 

@@ -96,15 +96,16 @@ static int do_boot_fit(cmd_tbl_t *cmdtp, int flag, int argc, char *const argv[])
 
 #ifdef CONFIG_ANDROID_AB
 	char slot_suffix[3] = {0};
-	char slot_info[21] = "android_slotsufix=";
+	char slot_info[21] = "android_slotsuffix=";
 
 	if (ab_get_slot_suffix(slot_suffix))
 		goto out;
 
 	strcat(slot_info, slot_suffix);
 	env_update("bootargs", slot_info);
-	ab_update_root_uuid();
 #endif
+
+	smp_event2(SEVT_1, STID_17, (ulong)fit);
 
 	ret = do_bootm_states(NULL, 0, ARRAY_SIZE(bootm_args), bootm_args,
 		BOOTM_STATE_START |

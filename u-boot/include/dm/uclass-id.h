@@ -89,6 +89,7 @@ enum uclass_id {
 	UCLASS_THERMAL,		/* Thermal sensor */
 	UCLASS_TIMER,		/* Timer device */
 	UCLASS_TPM,		/* Trusted Platform Module TIS interface */
+	UCLASS_UFS,             /* Universal Flash Storage */
 	UCLASS_USB,		/* USB bus */
 	UCLASS_USB_DEV_GENERIC,	/* USB generic device */
 	UCLASS_USB_HUB,		/* USB hub */
@@ -113,6 +114,7 @@ enum uclass_id {
 	UCLASS_RNG,		/* Random Number Generator */
 	UCLASS_DMC,		/* Dynamic Memory Interface */
 	UCLASS_PD,		/* power delivery */
+	UCLASS_KEYLAD,		/* keylad used to transfer otp key */
 	UCLASS_COUNT,
 	UCLASS_INVALID = -1,
 };

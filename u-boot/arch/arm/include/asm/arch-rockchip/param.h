@@ -10,6 +10,15 @@
 #include <memblk.h>
 
 /**
+ * ddr_mem_get_usable_size() - Get ddr memory region size that loader can use
+ *
+ * @base: ddr memory region base.
+ * @size: ddr memory region size.
+ * @return ddr memory region size that loader can use.
+ */
+phys_size_t ddr_mem_get_usable_size(u64 base, u64 size);
+
+/**
  * param_parse_ddr_mem() - Parse ddr memory region
  *
  * @out_count: valid count of memblock for memblock list.
@@ -79,4 +88,12 @@ int param_parse_pre_serial(int *flags);
  */
 int param_parse_pubkey_fuse_programmed(void);
 
+#ifdef CONFIG_PSTORE
+/**
+ * param_parse_pstore() - Parse and Init pstore according to pre-loader atags.
+ *
+ * @return 0 on success, otherwise failed.
+ */
+int param_parse_pstore(void);
+#endif
 #endif

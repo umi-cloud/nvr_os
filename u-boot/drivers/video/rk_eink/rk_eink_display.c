@@ -11,14 +11,24 @@
 #include <mapmem.h>
 #include <stdlib.h>
 #include <asm/arch/vendor.h>
+#include <dm/device-internal.h>
 #include <dm/of_access.h>
 #include <dm/uclass.h>
 #include <dm/uclass-id.h>
 #include <boot_rkimg.h>
 #include <rk_eink.h>
 #include <backlight.h>
+#include <power/regulator.h>
+#include <thermal.h>
 #include "rk_ebc.h"
 #include "epdlut/epd_lut.h"
+
+#if !CONFIG_IS_ENABLED(DM_THERMAL)
+inline int thermal_get_temp(struct udevice *dev, int *temp)
+{
+	return 0;
+}
+#endif
 
 #define PART_WAVEFORM		"waveform"
 #define EINK_LOGO_PART_MAGIC	"RKEL"
@@ -87,6 +97,8 @@ struct rockchip_eink_display_priv {
 	struct udevice *dev;
 	struct udevice *ebc_tcon_dev;
 	struct udevice *ebc_pwr_dev;
+	struct udevice *regulator_dev;
+	struct udevice *thermal_dev;
 	int vcom;
 	struct udevice *backlight;
 };
@@ -148,7 +160,7 @@ static int read_waveform(struct udevice *dev)
 	flush_dcache_range((ulong)plat->lut_pbuf,
 			   ALIGN((ulong)plat->lut_pbuf + cnt,
 				 CONFIG_SYS_CACHELINE_SIZE));
-	ret = epd_lut_from_mem_init(plat->lut_pbuf, &plat->lut_ops);
+	ret = epd_lut_from_mem_init(plat->lut_pbuf);
 	if (ret < 0) {
 		printf("lut init failed\n");
 		return -EINVAL;
@@ -160,8 +172,8 @@ static int read_waveform(struct udevice *dev)
 static u32 aligned_image_size_4k(struct udevice *dev)
 {
 	struct ebc_panel *plat = dev_get_platdata(dev);
-	u32 w = plat->vir_width;
-	u32 h = plat->vir_height;
+	u32 w = plat->width;
+	u32 h = plat->height;
 
 	return ALIGN((w * h) >> 1, 4096);
 }
@@ -281,6 +293,34 @@ static int read_grayscale(struct blk_desc *dev_desc,
 	return 0;
 }
 
+static int image_rearrange(u8 *in_buf, u8 *out_buf, u16 w, u16 h)
+{
+	int i, j;
+	u8 in_data;
+	u8 *out_buf_tmp;
+
+	if (!in_buf || !out_buf) {
+		printf("rearrange in buffer or out buffer is NULL\n");
+		return -EINVAL;
+	}
+
+	for (i = 0; i < h; i += 2) {
+		out_buf_tmp = out_buf + (i * w / 2);
+		for (j = 0; j < w / 2; j++) {
+			in_data = *in_buf++;
+			*(out_buf_tmp + j * 2) = in_data & 0x0f;
+			*(out_buf_tmp + j * 2 + 1) = (in_data >> 4) & 0x0f;
+		}
+		for (j = 0; j < w / 2; j++) {
+			in_data = *in_buf++;
+			*(out_buf_tmp + j * 2) |= (in_data << 4) & 0xf0;
+			*(out_buf_tmp + j * 2 + 1) |= in_data & 0xf0;
+		}
+	}
+
+	return 0;
+}
+
 static int image_mirror(u8 *in_buf, u8 *out_buf, u16 w, u16 h)
 {
 	int i;
@@ -344,11 +384,11 @@ static int read_needed_logo_from_partition(struct udevice *dev,
 		printf("eink logo read header failed,ret = %d\n", ret);
 		return -EINVAL;
 	}
-	if (part_hdr->screen_width != panel->vir_width ||
-	    part_hdr->screen_height != panel->vir_height){
+	if (part_hdr->screen_width != panel->width ||
+	    part_hdr->screen_height != panel->height){
 		printf("logo size(%dx%d) is not same as screen size(%dx%d)\n",
 		       part_hdr->screen_width, part_hdr->screen_height,
-			panel->vir_width, panel->vir_height);
+			panel->width, panel->height);
 		return -EINVAL;
 	}
 
@@ -381,8 +421,8 @@ static int read_needed_logo_from_partition(struct udevice *dev,
 			 * logo here.
 			 */
 			if (panel->mirror && logo_type != EINK_LOGO_KERNEL) {
-				u32 w = panel->vir_width;
-				u32 h = panel->vir_height;
+				u32 w = panel->width;
+				u32 h = panel->height;
 				u32 mirror_buf = 0;
 
 				mirror_buf = get_addr_by_type(dev,
@@ -394,6 +434,21 @@ static int read_needed_logo_from_partition(struct udevice *dev,
 				read_grayscale(dev_desc, &part, offset, size,
 					       (void *)((ulong)mirror_buf));
 				image_mirror((u8 *)((ulong)mirror_buf),
+					     (u8 *)((ulong)pic_buf), w, h);
+			} else if (panel->rearrange && logo_type != EINK_LOGO_KERNEL) {
+				u32 w = panel->width;
+				u32 h = panel->height;
+				u32 rearrange_buf = 0;
+
+				rearrange_buf = get_addr_by_type(dev,
+							      EINK_LOGO_UNMIRROR_TEMP_BUF);
+				if (rearrange_buf <= 0) {
+					printf("get mirror buffer failed\n");
+					return -EIO;
+				}
+				read_grayscale(dev_desc, &part, offset, size,
+					       (void *)((ulong)rearrange_buf));
+				image_rearrange((u8 *)((ulong)rearrange_buf),
 					     (u8 *)((ulong)pic_buf), w, h);
 			} else {
 				read_grayscale(dev_desc, &part, offset, size,
@@ -421,10 +476,16 @@ static int ebc_power_set(struct udevice *dev, int is_on)
 	struct udevice *ebc_tcon_dev = priv->ebc_tcon_dev;
 	struct rk_ebc_tcon_ops *ebc_tcon_ops = ebc_tcon_get_ops(ebc_tcon_dev);
 	struct udevice *ebc_pwr_dev = priv->ebc_pwr_dev;
-	struct rk_ebc_pwr_ops *pwr_ops = ebc_pwr_get_ops(ebc_pwr_dev);
+	struct rk_ebc_pwr_ops *pwr_ops = NULL;
+
+	if (ebc_pwr_dev)
+		pwr_ops = ebc_pwr_get_ops(ebc_pwr_dev);
 
 	if (is_on) {
-		ret = pwr_ops->power_on(ebc_pwr_dev);
+		if (pwr_ops)
+			ret = pwr_ops->power_on(ebc_pwr_dev);
+		else
+			ret  = regulator_set_enable(priv->regulator_dev, true);
 		if (ret) {
 			printf("%s, power on failed\n", __func__);
 			return -1;
@@ -440,7 +501,11 @@ static int ebc_power_set(struct udevice *dev, int is_on)
 			printf("%s, ebc tcon disable failed\n", __func__);
 			return -1;
 		}
-		ret = pwr_ops->power_down(ebc_pwr_dev);
+
+		if (pwr_ops)
+			ret = pwr_ops->power_down(ebc_pwr_dev);
+		else
+			ret  = regulator_set_enable(priv->regulator_dev, false);
 		if (ret) {
 			printf("%s, power_down failed\n", __func__);
 			return -1;
@@ -452,29 +517,36 @@ static int ebc_power_set(struct udevice *dev, int is_on)
 static int eink_display(struct udevice *dev, u32 pre_img_buf,
 			u32 cur_img_buf, u32 lut_type, int update_mode)
 {
-	u32 temperature, frame_num;
+	int temperature;
+	u32 frame_num;
 	struct rockchip_eink_display_priv *priv = dev_get_priv(dev);
 	struct ebc_panel *plat = dev_get_platdata(dev);
-	struct epd_lut_ops *lut_ops = &plat->lut_ops;
 	struct udevice *ebc_pwr_dev = priv->ebc_pwr_dev;
-	struct rk_ebc_pwr_ops *pwr_ops = ebc_pwr_get_ops(ebc_pwr_dev);
+	struct rk_ebc_pwr_ops *pwr_ops = NULL;
 	struct udevice *ebc_tcon_dev = priv->ebc_tcon_dev;
 	struct rk_ebc_tcon_ops *ebc_tcon_ops = ebc_tcon_get_ops(ebc_tcon_dev);
 
-	pwr_ops->temp_get(ebc_pwr_dev, &temperature);
+	if (ebc_pwr_dev)
+		pwr_ops = ebc_pwr_get_ops(ebc_pwr_dev);
+
+	if (pwr_ops)
+		pwr_ops->temp_get(ebc_pwr_dev, (u32 *)(&temperature));
+	else
+		thermal_get_temp(priv->thermal_dev, &temperature);
 	if (temperature <= 0 || temperature > 50) {
 		printf("temperature = %d, out of range0~50 ,use 25\n",
 		       temperature);
 		temperature = 25;
 	}
 
-	if (!lut_ops->lut_get) {
-		printf("get lut ops failed\n");
-		return -EIO;
-	}
-	lut_ops->lut_get(&plat->lut_data, lut_type, temperature);
-	frame_num = plat->lut_data.frame_num;
-	debug("lut_type=%d, frame num=%d, temp=%d\n", lut_type,
+	if(!plat->lut_data.wf_table[0])
+		plat->lut_data.wf_table[0] = kzalloc(MAXFRAME * 32 * 32, GFP_KERNEL);
+	epd_lut_get(&plat->lut_data, lut_type, temperature, WF_4BIT, 0);
+	kfree(plat->lut_data.wf_table[0]);
+	plat->lut_data.wf_table[0] = NULL;
+
+	frame_num = plat->lut_data.frame_num & 0xff;
+	printk("lut_type=%d, frame num=%d, temp=%d\n", lut_type,
 	      frame_num, temperature);
 
 	ebc_tcon_ops->wait_for_last_frame_complete(ebc_tcon_dev);
@@ -566,7 +638,7 @@ static int rockchip_eink_show_logo(int cur_logo_type, int update_mode)
 			return -1;
 		}
 
-		int size = (plat->vir_width * plat->vir_height) >> 1;
+		int size = (plat->width * plat->height) >> 1;
 
 		logo_addr = get_addr_by_type(dev, EINK_LOGO_RESET);
 		memset((u32 *)(u64)logo_addr, 0xff, size);
@@ -645,7 +717,7 @@ static int rockchip_eink_show_logo(int cur_logo_type, int update_mode)
 		char logo_args[64] = {0};
 		u32 uboot_logo_buf;
 
-		if (plat->mirror)
+		if (plat->mirror || plat->rearrange)
 			uboot_logo_buf = get_addr_by_type(dev,
 							  EINK_LOGO_UNMIRROR_TEMP_BUF);
 		else
@@ -690,10 +762,14 @@ int rockchip_eink_show_charge_logo(int logo_type)
 
 static int rockchip_eink_display_probe(struct udevice *dev)
 {
-	int ret, vcom, size, i;
+	struct rockchip_eink_display_priv *priv = dev_get_priv(dev);
+	struct dm_regulator_uclass_platdata *uc_pdata;
+	struct rk_ebc_pwr_ops *pwr_ops = NULL;
+	struct udevice *child, *pmic_dev;
+	int ret, vcom, size, i, uclass_id;
+	bool find_pmic = false;
 	const fdt32_t *list;
 	uint32_t phandle;
-	struct rockchip_eink_display_priv *priv = dev_get_priv(dev);
 
 	/* Before relocation we don't need to do anything */
 	if (!(gd->flags & GD_FLG_RELOC))
@@ -716,15 +792,41 @@ static int rockchip_eink_display_probe(struct udevice *dev)
 	size /= sizeof(*list);
 	for (i = 0; i < size; i++) {
 		phandle = fdt32_to_cpu(*list++);
+		/* TODO: migrate to pmic */
 		ret = uclass_get_device_by_phandle_id(UCLASS_I2C_GENERIC,
 						      phandle,
 						      &priv->ebc_pwr_dev);
 		if (!ret) {
-			printf("Eink: use pmic %s\n", priv->ebc_pwr_dev->name);
+			find_pmic = true;
+			break;
+		}
+
+		ret = uclass_get_device_by_phandle_id(UCLASS_PMIC, phandle, &pmic_dev);
+		if (!ret) {
+			for (device_find_first_child(pmic_dev, &child); child;
+			     device_find_next_child(&child)) {
+				uclass_id = device_get_uclass_id(child);
+				ret = device_probe(child);
+				if (ret) {
+					dev_warn(dev, "Failed to probe pmic %s\n", child->name);
+					continue;
+				}
+
+				if (uclass_id == UCLASS_REGULATOR) {
+					uc_pdata = dev_get_uclass_platdata(child);
+					if (!strcmp(uc_pdata->name, "vcom"))
+						priv->regulator_dev = child;
+				} else if (uclass_id == UCLASS_THERMAL) {
+					priv->thermal_dev = child;
+				}
+			}
+
+			find_pmic = true;
 			break;
 		}
 	}
-	if (ret) {
+
+	if (!find_pmic) {
 		dev_err(dev, "Cannot get pmic: %d\n", ret);
 		return ret;
 	}
@@ -743,15 +845,16 @@ static int rockchip_eink_display_probe(struct udevice *dev)
 		priv->vcom = vcom;
 	}
 
-	if (priv->ebc_pwr_dev) {
-		struct rk_ebc_pwr_ops *pwr_ops;
-
+	if (priv->ebc_pwr_dev)
 		pwr_ops = ebc_pwr_get_ops(priv->ebc_pwr_dev);
+
+	if (priv->ebc_pwr_dev)
 		ret = pwr_ops->vcom_set(priv->ebc_pwr_dev, priv->vcom);
-		if (ret) {
-			printf("%s, vcom_set failed\n", __func__);
-			return -EIO;
-		}
+	else
+		ret = regulator_set_value(priv->regulator_dev, priv->vcom * 1000);
+	if (ret) {
+		printf("%s, vcom_set failed\n", __func__);
+		return -EIO;
 	}
 
 	// read lut to ram, and get lut ops
@@ -773,6 +876,12 @@ static int rockchip_eink_display_ofdata_to_platdata(struct udevice *dev)
 	struct device_node *disp_mem;
 	struct device_node *waveform_mem;
 	struct ebc_panel *plat = dev_get_platdata(dev);
+	void * data;
+	int len;
+
+	data = (void *)dev_read_prop(dev, "wf,mode_table", &len);
+	if (len > 0 && pvi_wf_add_custom_mode_table(data, len))
+		return -ENODEV;
 
 	plat->width = dev_read_u32_default(dev, "panel,width", 0);
 	plat->height = dev_read_u32_default(dev, "panel,height", 0);
@@ -792,8 +901,11 @@ static int rockchip_eink_display_ofdata_to_platdata(struct udevice *dev)
 	plat->panel_16bit = dev_read_u32_default(dev, "panel,panel_16bit", 0);
 	plat->panel_color = dev_read_u32_default(dev, "panel,panel_color", 0);
 	plat->mirror = dev_read_u32_default(dev, "panel,mirror", 0);
+	plat->rearrange = dev_read_u32_default(dev, "panel,rearrange", 0);
 	plat->width_mm = dev_read_u32_default(dev, "panel,width-mm", 0);
 	plat->height_mm = dev_read_u32_default(dev, "panel,height-mm", 0);
+	plat->sdce_width = dev_read_u32_default(dev, "panel,sdce_width", 0);
+	plat->sdoe_mode = dev_read_u32_default(dev, "panel,sdoe_mode", 0);
 
 	disp_mem = of_parse_phandle(ofnode_to_np(dev_ofnode(dev)),
 				    "memory-region", 0);

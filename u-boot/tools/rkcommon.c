@@ -138,9 +138,14 @@ static struct spl_info spl_infos[] = {
 	{ "rv1108", "RK11", 0x1800, false, RK_HEADER_V1 },
 	{ "rv1126", "110B", 0x10000 - 0x1000, false, RK_HEADER_V1 },
 	{ "rk1808", "RK18", 0x200000 - 0x2000, false, RK_HEADER_V1 },
-	//dragon:{ "rk3568", "RK35", 0x10000 - 0x1000, false, RK_HEADER_V2 },
-	{ "rk3568", "RK35", 0x100000 - 0x1000, false, RK_HEADER_V2 },
+	{ "rk3528", "RK35", 0x10000 - 0x1000, false, RK_HEADER_V2 },
+	{ "rk3562", "RK35", 0x10000 - 0x1000, false, RK_HEADER_V2 },
+	{ "rk3568", "RK35", 0x10000 - 0x1000, false, RK_HEADER_V2 },
+	{ "rk3576", "RK35", 0x80000 - 0x1000, false, RK_HEADER_V2 },
 	{ "rk3588", "RK35", 0x100000 - 0x1000, false, RK_HEADER_V2 },
+	{ "rk3506", "RK35", 0x40000 - 0x1000, false, RK_HEADER_V2 },
+	{ "rv1103b", "110E", 0x40000 - 0x1000, false, RK_HEADER_V2 },
+	{ "rv1106", "110C", 0x28000 - 0x1000, false, RK_HEADER_V2 },
 };
 
 /**
@@ -172,12 +177,10 @@ static struct spl_info *rkcommon_get_spl_info(char *imagename)
 
 	if (!imagename)
 		return NULL;
-	fprintf(stderr,	"<%s> dragon: imagename (%s)  count(%d)\n", __func__, imagename, ARRAY_SIZE(spl_infos));
+
 	for (i = 0; i < ARRAY_SIZE(spl_infos); i++)
-		if (!strncmp(imagename, spl_infos[i].imagename, 6)) {
-			fprintf(stderr,	"<%s> dragon: return spl_infos + (%d)\n", __func__, i);
+		if (!strncmp(imagename, spl_infos[i].imagename, 6))
 			return spl_infos + i;
-		}
 
 	return NULL;
 }
@@ -220,9 +223,6 @@ int rkcommon_check_params(struct image_tool_params *params)
 		spl_params.boot_file += 1;
 	}
 
-	fprintf(stderr,	"<> dragon: boot_file   %s\n", spl_params.boot_file);
-	fprintf(stderr,	"<> dragon: init_file   %s\n", spl_params.init_file);
-
 	spl_params.init_size =
 		rkcommon_get_aligned_size(params, spl_params.init_file);
 	if (spl_params.init_size < 0)
@@ -232,19 +232,13 @@ int rkcommon_check_params(struct image_tool_params *params)
 	if (spl_params.boot_file) {
 		spl_params.boot_size =
 			rkcommon_get_aligned_size(params, spl_params.boot_file);
-		
 		if (spl_params.boot_size < 0)
 			return EXIT_FAILURE;
 	}
 
-	fprintf(stderr,	"<> dragon: imagename (%s), imagename2 (%s),datafile (%s), imagefile (%s), cmdname (%s)\n", 
-		params->imagename, params->imagename2, params->datafile, params->imagefile, params->cmdname);
-	fprintf(stderr,	"<> dragon: file_size  (0x%x), orig_file_size  (0x%x) \n", params->file_size, params->orig_file_size);
-	
-	
 	if (spl_params.init_size > rkcommon_get_spl_size(params)) {
 		fprintf(stderr,
-			"<> Error: SPL image is too large (size %#x than %#x)\n",
+			"Error: SPL image is too large (size %#x than %#x)\n",
 			spl_params.init_size, rkcommon_get_spl_size(params));
 		return EXIT_FAILURE;
 	}
@@ -276,7 +270,7 @@ const char *rkcommon_get_spl_hdr(struct image_tool_params *params)
 int rkcommon_get_spl_size(struct image_tool_params *params)
 {
 	struct spl_info *info = rkcommon_get_spl_info(params->imagename);
-fprintf(stderr,	"<> dragon: info->spl_size  (0x%x)\n", info->spl_size);
+
 	/*
 	 * info would not be NULL, because of we checked params before.
 	 */

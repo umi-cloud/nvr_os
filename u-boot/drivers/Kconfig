@@ -40,6 +40,8 @@ source "drivers/i2c/Kconfig"
 
 source "drivers/input/Kconfig"
 
+source "drivers/keylad/Kconfig"
+
 source "drivers/led/Kconfig"
 
 source "drivers/mailbox/Kconfig"
@@ -101,6 +103,8 @@ source "drivers/timer/Kconfig"
 source "drivers/tpm/Kconfig"
 
 source "drivers/usb/Kconfig"
+
+source "drivers/ufs/Kconfig"
 
 source "drivers/video/Kconfig"
 

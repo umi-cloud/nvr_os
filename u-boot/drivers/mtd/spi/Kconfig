@@ -178,8 +178,20 @@ config SPI_FLASH_DOSILICON
 config SPI_FLASH_BOYA
 	bool "BOYA SPI flash support"
 	help
-	  Add support for various BOYA (Dosilicon Co., Ltd)
+	  Add support for various BOYA (BOYA Co., Ltd)
 	  SPI flash chips (BY25Qxxxx).
+
+config SPI_FLASH_ZBIT
+	bool "ZBIT SPI flash support"
+	help
+	  Add support for various ZBIT (ZBIT Co., Ltd)
+	  SPI flash chips (ZB25Qxxxx).
+
+config SPI_FLASH_NORMEM
+	bool "NORMEM SPI flash support"
+	help
+	  Add support for various NORMEM (NORMEM Co., Ltd)
+	  SPI flash chips (NM25Qxxxx).
 
 endif
 
@@ -215,7 +227,7 @@ config SPI_FLASH_DATAFLASH
 
 config SPI_FLASH_MTD
 	bool "SPI Flash MTD support"
-	depends on SPI_FLASH
+	depends on SPI_FLASH && MTD_BLK
 	help
           Enable the MTD support for spi flash layer, this adapter is for
 	  translating mtd_read/mtd_write commands into spi_flash_read/write
@@ -230,6 +242,15 @@ config SPL_SPI_FLASH_MTD
 	depends on SPI_FLASH
 	help
           Enable the MTD support for the SPI flash layer in SPL.
+
+	  If unsure, say N
+
+config SPI_FLASH_AUTO_MERGE
+	bool "SPI flash auto merge two flash in one"
+	default n
+	depends on SPI_FLASH
+	help
+          Enable the auto merge the two SPI flash in one.
 
 	  If unsure, say N
 
