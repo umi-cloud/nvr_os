@@ -1,6 +1,7 @@
-# nvr-os — RK3566 Linux SDK
+# nvr-os — RK3566 / RV1126B Linux SDK
 
-Rockchip RK3566 Linux SDK,单内核单 rootfs:
+主线是 RK3566;RV1126B 于 2026-09-16 接入,目前只有官方 EVB 标准配置(u-boot + 内核可编),
+自研版型未定,真机未验。单内核单 rootfs:
 - `kernel/`:6.1(armbian 官方镜像 `rk-6.1-rkr6.1` = `linux-6.1-stan-rkr6.1`,无需账号)
 - rootfs:Debian 12 bookworm headless
 
@@ -77,7 +78,8 @@ TF 卡槽存在,sdmmc0 保持启用(dwmmc "No normal pinctrl" 告警无害)。
 看门狗 /dev/watchdog0 可用,**nvr-edge 需实现喂狗**。
 
 已完成:librknnrt 2.3.2(配 rknpu 0.9.8);首块板整机点亮验证(eMMC/网口/加速全家/分区自适应);
-开机 logo 全程无缝(u-boot drm-logo 预留页对齐补丁 + 360px um 标志);
+开机 logo 全程无缝(u-boot drm-logo 预留区页对齐 + 360px um 标志;2026-09-16 换树后
+该对齐由上游 `align_size = PAGE_SIZE` 提供,不再是本仓补丁);
 DDR 动态调频(opp 适配 DDR3 频点 + 使能 dfi + auto-freq-en=1,空闲 324MHz↔负载 1056MHz 实测闭环;
 建议量产前跑通宵压力浸泡);WiFi/BT/vfd 全量裁剪。
 待观察:sdmmc supports-* 旧式属性未移植(6.1 官方属性优先,异常再查)。
@@ -208,11 +210,17 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 
 ## 板级配置
 
-- 选板:`./build.sh lunch`,配置文件在 `device/rockchip/rk356x/BoardConfig-*.mk`,选中后软链到 `device/rockchip/.BoardConfig.mk`
+- 选板:`./build.sh lunch`,配置文件在 `device/rockchip/rk356x/BoardConfig-*.mk` 与 `device/rockchip/rv1126b/BoardConfig-*.mk`,选中后软链到 `device/rockchip/.BoardConfig.mk`
+- ⚠ 切板与构建要分两条命令:`build.sh` 启动时就 source 了板级配置,
+  `./build.sh <BoardConfig>.mk uboot` 会用**切板前**的配置去编,编出来的是上一块板的固件
 - 区分逻辑:芯片级(`RK_UBOOT_DEFCONFIG`、rkbin loader)/ 板级(`RK_KERNEL_DIR` 选内核树 + `RK_KERNEL_DTS`,核心)/ 系统级(rootfs、分区表 parameter)
-- 现有板子(**只剩两块**,`BoardConfig.mk` 默认项已改指 SATA 板):
+- 现有板子(RK3566 两块 + RV1126B 一块,`rk356x/BoardConfig.mk` 默认项已改指 SATA 板):
   - `BoardConfig-rk3566-nvr-ddr3-v1.0.mk`:NVR 无 SATA 板(硬件同为 V1.0,旧命名 v10 已统一为 v1.0),8颗 8bit DDR3,**kernel** + DTS `rk3566-nvr-ddr3-v1.0`(override 风格,基于官方 box-demo dtsi,含电源域 1.8V/RGMII 时延等实板参数)+ defconfig 片段 `nvr.config`
   - `BoardConfig-rk3566-nvr-ddr3-sata-v1.0.mk`:NVR SATA 板(原理图 UMI-NVR-RK3566-V1.0),DTS `rk3566-nvr-ddr3-sata-v1.0` include 无 SATA 板 dts 只维护差异:SATA 硬盘位(sata2/combphy2,combphy1 保留 USB3 host)、RK809-5 PMIC(box.dtsi 占位 regulator 删除后按原 label 重建,vdd_cpu 仍 PWM 调压)、HYM8563 RTC、RK809 codec 声卡;内核配置与无 SATA 板完全一致
+  - `rv1126b/BoardConfig-rv1126b-evb1-v10.mk`:RV1126B 官方 EVB1 V10 标准配置,DTS `rv1126b-evb1-v10`
+    (官方树自带),内核 defconfig `rv1126b_defconfig`。**仅验证到能编出 uboot.img 与 boot.img**,
+    rootfs/固件打包与真机启动都未做;`RK_CFG_BUILDROOT`/`RK_CFG_RECOVERY` 留空(buildroot 无 rv1126b 配置)。
+    自研 SATA 版型另建 BoardConfig——RV1126B **无原生 SATA**,录像盘走 USB3-SATA 桥,与 RK3566 的 sata2/combphy2 完全不同
 - ⚠ **两块板的固件不通用,烧前先确认 `.BoardConfig.mk` 软链指向哪块**。SATA 板 dts 会
   `/delete-node/` 掉 `vcc_1v8`/`vcc_3v3` 等固定 regulator,改由 i2c0 上的 RK809 提供;
   这份固件烧到无 SATA 板上,PMIC 不存在 → regulator 全缺 → `pmu_io_domains` 配不起来 →

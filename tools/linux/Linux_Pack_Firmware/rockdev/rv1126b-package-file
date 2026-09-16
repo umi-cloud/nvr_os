@@ -1,0 +1,11 @@
+# NAME		Relative path
+# RV1126B EVB 打包清单: 官方标准分区表,但不含 oem/userdata(未生成这两个镜像)
+package-file	package-file
+bootloader	Image/MiniLoaderAll.bin
+parameter	Image/parameter.txt
+uboot		Image/uboot.img
+misc		Image/misc.img
+boot		Image/boot.img
+recovery	Image/recovery.img
+rootfs		Image/rootfs.img
+backup		RESERVED

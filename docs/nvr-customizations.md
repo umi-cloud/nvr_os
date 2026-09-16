@@ -71,6 +71,8 @@ systemd-run 代执行挂盘与写网络配置),改之前先读该文件的注释
 | `rk356x/BoardConfig-rk3566-nvr-ddr3-v1.0.mk` | 无 SATA 板 |
 | `rk356x/BoardConfig-rk3566-nvr-ddr3-sata-v1.0.mk` | SATA 板,`BoardConfig.mk` 默认指向它 |
 | `rk356x/parameter-nvr.txt` | 两块板共用的分区表 |
+| `rv1126b/BoardConfig-rv1126b-evb1-v10.mk` | 新增,RV1126B EVB1 V10 官方标准配置,用于打通构建链;自研版型定型后另建 |
+| `rv1126b/parameter.txt`、`boot.its`、`boot4recovery.its` | 取自官方 rv1126b SDK,未改 |
 
 其余 BoardConfig 与 `parameter-buildroot-*` 已于 2026-09-08 随旧板下线删除。
 
@@ -79,7 +81,8 @@ systemd-run 代执行挂盘与写网络配置),改之前先读该文件的注释
 | 文件 | 说明 |
 |---|---|
 | `tools/linux/Linux_Pack_Firmware/rockdev/rk356x-nvr-package-file` | update.img 打包清单,`build.sh updateimg` 依赖 |
-| `u-boot/` | 一处改动:drm-logo 预留内存 size 页对齐,6.1 内核校验要求 |
+| `tools/linux/Linux_Pack_Firmware/rockdev/rv1126b-package-file` | 新增,rv1126b 打包清单(暂不含 oem/userdata) |
+| `u-boot/` | 2026-09-16 整棵换为 rv1126b SDK(`rv1126b_linux6.1_release_v1.0.0_20250620`)的树,同为 2017.09 但含 rv1126b 支持;原先那处 drm-logo 页对齐改动上游已修(`align_size = PAGE_SIZE`),无需重打,故本目录现为纯原厂 |
 | `buildroot/fs/cpio/cpio.mk` | 一处改动 |
 | `docs/nvr-edge-integration.md` | rootfs 对下发组件承诺的 ABI 面 |
 | `docker/` | 编译环境,Dockerfile 与 run.sh,宿主机缺依赖必须走它 |
@@ -100,7 +103,8 @@ systemd-run 代执行挂盘与写网络配置),改之前先读该文件的注释
 | rknpu 驱动 | 0.9.8 | 随内核 | rkr7.2 里仍是 0.9.8 |
 | libmali | g52-g24p0 | 内核 kbase 有 g29p1 | 无配套用户态库,不能单独升 |
 | gst-rockchip 插件 | 1.14-4 | 按分支发布 | **刻意钉住**,重编后 1080p I420 走 RGA 必失败 |
-| u-boot / rkbin / debian / device | 原厂分支 | Gerrit 需账号 | 本机无账号,拉不到更新 |
+| u-boot | rv1126b SDK 2025-06 树 | Gerrit 需账号 | 2026-09-16 换树,见上表 |
+| rkbin / debian / device | 原厂分支 | Gerrit 需账号 | 本机无账号,拉不到更新 |
 
 内核升 rkr7.2 是唯一实质可做的升级,带来 54 个 stable 点版本、RGA 内核侧 1.3.13、
 Mali kbase g29p1。代价是我们改的 `stmmac_main.c` 需要重新适配,两份 dts 要验证,

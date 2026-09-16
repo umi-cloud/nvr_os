@@ -42,5 +42,6 @@ docker build --network=host -t nvr-os-builder:20.04 docker/
 ./build.sh updateimg                 # 整机包 rockdev/update.img
 ```
 
-选板见 `./build.sh lunch`,现有两块:`rk3566-nvr-ddr3-v1.0`(无 SATA)与
-`rk3566-nvr-ddr3-sata-v1.0`(SATA,默认)。两块板固件不通用,细节见 CLAUDE.md。
+选板见 `./build.sh lunch`,现有三块:`rk3566-nvr-ddr3-v1.0`(无 SATA)、
+`rk3566-nvr-ddr3-sata-v1.0`(SATA,默认)与 `rv1126b-evb1-v10`(RV1126B 官方 EVB
+标准配置,仅打通构建链,自研版型未定)。各板固件不通用,细节见 CLAUDE.md。
