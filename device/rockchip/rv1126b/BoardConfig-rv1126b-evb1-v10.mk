@@ -32,7 +32,7 @@ export RK_ROOTFS_IMG=rockdev/rootfs.${RK_ROOTFS_TYPE}
 # 二者只在 mkfirmware 取打包工具与编 recovery 时用到,uboot/kernel 构建不需要
 
 # ---- 分区与打包 ----
-# 官方标准分区表
-export RK_PARAMETER=parameter.txt
+# 与 rk3566 共用 rootfs,分区表也共用(软链到 rk356x/parameter-nvr.txt,uboot/misc 偏移两颗芯片一致)
+export RK_PARAMETER=parameter-nvr.txt
 # 打包清单暂不含 oem/userdata(未生成这两个镜像,列入会导致 updateimg 失败)
 export RK_PACKAGE_FILE=rv1126b-package-file

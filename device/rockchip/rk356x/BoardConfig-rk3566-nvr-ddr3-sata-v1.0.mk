@@ -40,7 +40,7 @@ export RK_ROOTFS_IMG=rockdev/rootfs.${RK_ROOTFS_TYPE}
 export RK_CFG_BUILDROOT=rockchip_rk3566
 
 # ---- 分区与打包 ----
-# boot 128M / rootfs 4G / userdata 6G / vcache:grow
+# boot 128M / recovery 64M / rootfs 5G / userdata 10G / vcache:grow(按 parameter-nvr.txt 核算)
 export RK_PARAMETER=parameter-nvr.txt
 # update.img 打包清单(无 oem/userdata)
 export RK_PACKAGE_FILE=rk356x-nvr-package-file
