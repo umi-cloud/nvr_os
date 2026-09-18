@@ -32,16 +32,16 @@
 | 路径 | 内容 |
 |---|---|
 | `/usr/local/bin/nvr` | **引导器**(systemd ExecStart 目标,见第 4 节) |
-| `/usr/local/lib/nvr/nvr-edge` | 出厂基线主程序真身 |
+| `/usr/local/lib/nvr/nvr-edge` | 出厂基线主程序真身(**不入 git**,见第 6 节) |
 | `/usr/local/nvr/plugins/` | 板级优化二进制预留位(当前空,见 3.2) |
 | `/lib/systemd/system/nvr.service` | 服务单元 |
-| `/usr/local/lib/nvr/VERSION` | 基线版本/commit/sha256,构建期用于组装 `nvr-release` |
+| `/usr/local/lib/nvr/VERSION` | 基线版本/commit/sha256,构建期写入 `os-release` 的 `NVR_AGENT_*` 字段 |
 | `/etc/nvr/nvr.env` | 运行参数默认值;设备身份由 `/userdata/nvr/nvr.env` 覆盖 |
-| `/etc/nvr-release` | 镜像 ABI 清单(见第 5 节) |
+| `/etc/os-release` 的 `NVR_AGENT_*` | 出厂基线版本(见第 5 节) |
 | `/etc/systemd/network/10-lan.network` | 有线 DHCP(见 2.4) |
 | `/usr/lib/librknnrt.so` | NPU runtime,下发引擎 `.so` 的依赖 |
 
-镜像内容由 `debian/overlay-nvr/` 提供,`mk-rootfs-bookworm.sh` 在装配段拷入(仅 bookworm 线,dragon 板不受影响)。基线二进制由 `debian/sync-nvr-edge.sh` 从 nvr-edge 仓同步,该脚本校验 ARM aarch64 ELF 与 glibc 符号版本上限,不参与编译。
+镜像内容由 `debian/overlay-nvr/` 提供,`mk-rootfs-bookworm.sh` 在装配段拷入。基线二进制与 `VERSION` **不入 git**,由 `debian/sync-nvr-edge.sh` 从 nvr-edge 的 `make baseline` 产物装入并执行门禁(第 6 节);缺基线时 rootfs 构建直接失败,不会静默产出没有应用层的镜像。
 
 ### 2.2 数据层(work-dir = `/userdata/nvr`)
 
@@ -132,24 +132,20 @@ updater 将新版主程序写入 `data/selfupdate/nvr-edge/current/nvr-edge`,健
 
 ### 约定
 
-`/usr/local/bin/nvr` 是**引导器**,不是主程序本体:
+`/usr/local/bin/nvr` 是**引导器**,不是主程序本体。实现见
+`debian/overlay-nvr/usr/local/bin/nvr`(本文只述约定,不复制脚本,以免两处失配),行为是:
 
-```sh
-#!/bin/sh
-# /usr/local/bin/nvr — 出厂基线与自更新槽之间的引导 + 启动参数组装
-SLOT=/userdata/nvr/data/selfupdate/nvr-edge/current/nvr-edge
-
-# device-sn 未由产线/现场注入时回落设备树序列号(硬件唯一)
-if [ -z "$NVR_DEVICE_SN" ] && [ -r /proc/device-tree/serial-number ]; then
-	NVR_DEVICE_SN=$(tr -d '\0' < /proc/device-tree/serial-number)
-fi
-set -- --work-dir "${NVR_WORK_DIR:-/userdata/nvr}" \
-	--cache-dir "${NVR_CACHE_DIR:-/userdata/nvr/cache}" \
-	--agent-id "${NVR_AGENT_ID}" --device-sn "${NVR_DEVICE_SN}" "$@"
-
-[ -x "$SLOT" ] && exec "$SLOT" "$@"
-exec /usr/local/lib/nvr/nvr-edge "$@"
-```
+1. **把出厂基线复制到可写目录再启动**:运行体是 `<work-dir>/bin/nvr-edge`,缺失或
+   0 字节时才从 `/usr/local/lib/nvr/nvr-edge` 补一份(先落 `.tmp` 再 `mv`)。
+   不直接 exec rootfs 里的基线,是因为 nvr-edge 把 `os.Executable()` 当作"systemd 固定
+   启动路径",自更新切槽后会把活动槽二进制复制回这个路径;指向 `/usr` 时
+   `ProtectSystem=full` 下只读 → 复制失败 → `Install()` 整体回滚,表现为
+   **裸机首次 OTA 必然失败且永远卡在出厂版本**。
+2. **不做"槽优先"选择**:哪个槽活动由 updater 的 `state.json` 说了算(回滚也走它),
+   引导器只保证固定路径上有一个能跑的二进制。已存在的运行体不会被基线覆盖 ——
+   **换了 rootfs 里的基线不会让已部署设备升级**,升级只走 OTA;要强制回到出厂版本,
+   删掉运行体并清 `data/selfupdate/nvr-edge/state.json` 再重启。
+3. **组装启动参数**(见下),并在 `nvr.env` 未注入时用设备树序列号兜底 device-sn。
 
 **参数必须在引导器里组装,不能写进 unit 的 ExecStart**:systemd 对不带引号的 `${VAR}`
 做 word splitting,空值会让整个参数消失。未绑定设备(`nvr.env` 身份留空)因此退化成
@@ -162,26 +158,31 @@ exec /usr/local/lib/nvr/nvr-edge "$@"
 
 由此得到的性质:
 
-- rootfs 可只读 —— 自更新只写 `/userdata`;
-- 首启双槽为空,自动回落出厂基线,裸机可启动;
-- 回滚天然生效 —— updater 切 symlink 即可,引导器无状态;
-- `exec` 后 `os.Executable()` 返回双槽真实路径,`process_restart.go` 的自重启也落在新版上;
+- rootfs 可只读 —— 运行体与自更新都只写 `/userdata`;
+- 首启运行体为空,自动从出厂基线补一份,裸机可启动;
+- 回滚天然生效 —— updater 按 `state.json` 把活动槽同步回运行体,引导器无状态;
+- 某次同步没落上时,下次启动 `RecoverBoot` 会再 activate 一遍并请求重启,自愈;
 - 引导器本身极简,不参与任何更新通道。
 
 ## 5. rootfs 对外 ABI 面
 
-组件全部远程下发后,rootfs 提供的 ABI 面即成为对外契约,**改动会破坏已下发组件**。镜像声明 `/etc/nvr-release`,由 nvr-edge 随 `components/status` 上报,平台据此选择组件构建:
+组件全部远程下发后,rootfs 提供的 ABI 面即成为对外契约,**改动会破坏已下发组件**。
 
-```json
-{
-  "image_version": "nvr-ddr3-v1.0-20260731",
-  "soc": "rk3566",
-  "arch": "arm64",
-  "libc": "glibc-2.36",
-  "rknnrt": "2.3.2",
-  "agent_baseline": "0.15.0"
-}
+镜像只在 `/etc/os-release` 声明出厂基线(freedesktop 规范允许的发行方扩展字段,加 `NVR_` 前缀),即 OTA 之后运行时推不出来的出厂 nvr 版本:
+
 ```
+NVR_AGENT_BASELINE="1.4.0"
+NVR_AGENT_COMMIT="a982cf9"
+NVR_AGENT_SHA256="e270ef5e…"
+```
+
+其余 ABI 信息不写进镜像,由 nvr-edge 运行时探测:rootfs 由 rk3566 与 rv1126b 共用,写死的芯片名在另一颗芯片上是错的,版本号随 OTA 也会过时。现状(2026-09-17 核实):
+
+- 芯片型号、glibc 版本:`platform.DetectChip` 探测,随设备注册上报(`cloud/payload.go` 的 `glibc_version`)
+- librknnrt 版本:**尚无运行时探测与上报**
+- `NVR_AGENT_*`:**尚无读取方**
+
+> 此前的 `/etc/nvr-release`(JSON 清单,含写死的 `soc`)已于 2026-09-17 移除:全仓库只有写入方,文档所述"随 `components/status` 上报"从未实现。
 
 必须长期保证的接口:
 
@@ -197,7 +198,46 @@ exec /usr/local/lib/nvr/nvr-edge "$@"
 >
 > 对应约束:**组件发布侧必须以 bookworm 为构建基线**,发布门禁校验 `readelf -V <bin> | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1` ≤ 2.36。开发机(Ubuntu 24.04 等)直接 `make release` 产出的 sidecar 会带 `GLIBC_2.38`,推到设备上必然起不来。
 
-## 6. 实施状态
+## 6. 出厂基线规范
+
+镜像内置的 nvr-edge 是设备出厂时唯一的应用层,裸机首启、OTA 失败回滚、恢复出厂都落回它。
+规则如下,由 `nvr-edge` 的 `make baseline` 与本仓 `debian/sync-nvr-edge.sh` 共同保证。
+
+**怎么产出**(nvr-edge 仓):
+
+```bash
+make baseline              # 当前 HEAD
+make baseline REV=v1.5.2   # 指定 tag/commit
+```
+
+- **只从已提交版本编**:在 `REV` 的临时 worktree 里构建,工作区未提交的改动进不了出厂镜像。
+  历史上出过 `commit=a982cf9+dirty` 的基线 —— 无法复现,也说不清里面有什么。
+- **固定正式云控**,且只认仓库内的 `cloud.json`:本地私有的 `cloud.prod.json` 不在 worktree 里,
+  故同一 commit 编出的基线内容确定。
+- **必须内嵌前端**:`FULL=0` 那种快速构建只塞一个空占位,装进出厂镜像等于设备没有 Web 界面。
+- 产物 `out/baseline/{nvr-edge,VERSION}`;`VERSION` 记版本、完整 commit、sha256、构建时间、
+  云控环境与地址、前端文件数。
+
+**怎么装入**(本仓):`./debian/sync-nvr-edge.sh [nvr-edge 仓路径]`,六道门禁全过才写入 overlay:
+
+| 门禁 | 拦的是什么 |
+|---|---|
+| sha256 与 `VERSION` 一致 | 二进制与版本记录对不上(装了 A 记了 B) |
+| commit 是完整 sha1 且在 nvr-edge 仓里 | 脏树产物、来路不明的二进制 |
+| ARM aarch64 ELF | 开发机直接编出的 x86_64 |
+| glibc 符号 ≤ 2.36 | 高版本构建环境的产物,装进 bookworm 起不来 |
+| `web_files > 1` | 没有前端的空壳基线 |
+| 嵌的是正式云控地址、且不含测试地址 | 出厂设备连错平台 —— 要整机重烧才能纠正 |
+
+正式地址取自该 commit 的 `cloud.json`,不在本仓写死域名。
+
+**不入 git**:基线 40M,每换一版仓库就多一份历史,`.gitignore` 已排除二进制与 `VERSION`。
+代价是克隆后必须先跑一次同步脚本才能构建带 nvr 的 rootfs(`README` 最小可构建集同理)。
+
+**何时更新**:跟随发版更新,单独一个提交,不夹在别的改动里。更新基线不会让已部署设备升级
+(引导器不覆盖已有运行体,见第 4 节),只影响新烧录的设备与恢复出厂。
+
+## 7. 实施状态
 
 ### nvr-os 侧(已完成,待上板验证)
 
@@ -210,10 +250,10 @@ exec /usr/local/lib/nvr/nvr-edge "$@"
 | NetworkManager → systemd-networkd | 同上,包列表 / networkd 配置 / enable |
 | 移除 overlay 带来的 NM 配置(dragon 板共用 overlay,不动原件) | 同上,减法段 |
 | `systemctl enable nvr.service`(条件启用) | 同上,chroot 段 |
-| 构建期生成 `/etc/nvr-release` | 同上,收尾段 |
+| 构建期往 `/etc/os-release` 写出厂基线 `NVR_AGENT_*` | 同上,收尾段 |
 | 设备端默认 DNS 覆盖构建机 `resolv.conf` | 同上,收尾段 |
 
-**验证方式**:`./docker/run.sh ./build.sh debian` 重建 rootfs → `./mkfirmware.sh`(宿主机)→ 整机烧写。重点验网络(`networkctl status`、`ip route`)、`/tmp` 是否 tmpfs(`findmnt /tmp`)、`nvr.service` 是否起来(`systemctl status nvr`)、`/etc/nvr-release` 内容。
+**验证方式**:`./docker/run.sh ./build.sh debian` 重建 rootfs → `./mkfirmware.sh`(宿主机)→ 整机烧写。重点验网络(`networkctl status`、`ip route`)、`/tmp` 是否 tmpfs(`findmnt /tmp`)、`nvr.service` 是否起来(`systemctl status nvr`)、`/etc/os-release` 里的 `NVR_AGENT_*` 字段。
 
 ### nvr-edge 侧(待办)
 
@@ -221,7 +261,7 @@ exec /usr/local/lib/nvr/nvr-edge "$@"
 2. **非镜像部署下主程序自更新仍失效**:`cmd/debian/install.sh` + `cmd/debian/nvr.service` 走 `/opt/nvr` 且 `ExecStart` 直指基线,无引导器(第 4 节)。板子走镜像预装、由 overlay-nvr 解决,不执行该脚本;通用 Debian/x86 安装若要支持主程序自更新需同样处理
 3. `dev-mock-rk.sh` 的 `/usr/local/nvr` 测试布局保留,仅作开发态,不进入产品约定
 
-## 7. 未定项
+## 8. 未定项
 
 | 项 | 说明 |
 |---|---|

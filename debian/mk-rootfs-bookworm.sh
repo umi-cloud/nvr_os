@@ -99,7 +99,10 @@ if [ -x overlay-nvr/usr/local/lib/nvr/nvr-edge ]; then
 		}
 	done
 else
-	echo -e "\033[33m overlay-nvr 无 nvr-edge 基线,跳过;先执行 ./sync-nvr-edge.sh \033[0m"
+	# 基线二进制不入 git(见 docs/nvr-edge-integration.md 第 6 节),克隆后必须先同步。
+	# 这里不能只告警跳过:那样会静默产出一个没有 nvr 应用层的镜像,烧进设备才发现
+	echo -e "\033[31m overlay-nvr 无 nvr-edge 基线;先执行 ./sync-nvr-edge.sh \033[0m" >&2
+	exit 1
 fi
 
 # Rockchip 官方 vendor storage 工具(external/rktoolkit),产线写 SN/MAC 与开机套 USB 网口 MAC 都靠它。
@@ -173,10 +176,11 @@ EOF
 fi
 
 # 主机名 / hosts / fstab / dns(chroot 内 apt 需要)
-echo nvr-rk3566 | sudo tee $TARGET_ROOTFS_DIR/etc/hostname > /dev/null
+# rootfs 多芯片共用,默认名不带芯片型号;有序列号的板子开机由 nvr-hostname 改成 UMI-<SN后6位>
+echo nvr | sudo tee $TARGET_ROOTFS_DIR/etc/hostname > /dev/null
 sudo tee $TARGET_ROOTFS_DIR/etc/hosts > /dev/null <<'EOF'
 127.0.0.1	localhost
-127.0.1.1	nvr-rk3566
+127.0.1.1	nvr
 ::1		localhost ip6-localhost ip6-loopback
 EOF
 sudo tee $TARGET_ROOTFS_DIR/etc/fstab > /dev/null <<'EOF'
@@ -465,26 +469,19 @@ nameserver 2400:3200::1
 nameserver 2400:3200:baba::1
 EOF
 
-# NVR ABI 清单: 组件(sidecar/ffmpeg/ffprobe/go2rtc)与引擎 .so 全部远程下发后,
-# rootfs 提供的 ABI 面即成为对外契约。nvr-edge 随 components/status 上报本文件,
-# 平台据此选择可下发的组件构建 —— 尤其 libc,构建环境高于此值的二进制装不上。
+# 出厂基线写进 /etc/os-release(freedesktop 规范允许发行方扩展字段,按规范加 NVR_ 前缀)。
+# 只写 OTA 之后运行时推不出来的出厂 nvr 版本;芯片、架构、glibc、librknnrt 版本
+# 由 nvr-edge 运行时探测(镜像里写死会随 OTA 过时,rootfs 又由多颗芯片共用)。
 if [ -f overlay-nvr/usr/local/lib/nvr/VERSION ]; then
 	AGENT_VER=$(grep -oP '^version=\K.*' overlay-nvr/usr/local/lib/nvr/VERSION)
 	AGENT_COMMIT=$(grep -oP '^commit=\K.*' overlay-nvr/usr/local/lib/nvr/VERSION)
 	AGENT_SHA=$(grep -oP '^sha256=\K.*' overlay-nvr/usr/local/lib/nvr/VERSION)
-	RKNNRT_VER=$(ls -d packages/$ARCH/rknpu2/rknpu2-rk356x-v* 2>/dev/null |
-		head -1 | grep -oP 'v\K[0-9.]+$' || echo unknown)
-	sudo tee $TARGET_ROOTFS_DIR/etc/nvr-release > /dev/null <<EOF
-{
-  "image_version": "bookworm-$(date +%Y%m%d)",
-  "soc": "rk3566",
-  "arch": "$ARCH",
-  "libc": "glibc-$GLIBC_VER",
-  "rknnrt": "$RKNNRT_VER",
-  "agent_baseline": "$AGENT_VER",
-  "agent_commit": "$AGENT_COMMIT",
-  "agent_sha256": "$AGENT_SHA"
-}
+	OS_RELEASE=$TARGET_ROOTFS_DIR/etc/os-release
+	sudo sed -i '/^NVR_AGENT_/d' $OS_RELEASE
+	sudo tee -a $OS_RELEASE > /dev/null <<EOF
+NVR_AGENT_BASELINE="$AGENT_VER"
+NVR_AGENT_COMMIT="$AGENT_COMMIT"
+NVR_AGENT_SHA256="$AGENT_SHA"
 EOF
 fi
 

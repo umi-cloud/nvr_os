@@ -28,6 +28,11 @@
 # debian/overlay-firmware 才能完整构建 rootfs 与内核。
 /prebuilts/gcc/
 /debian/overlay-firmware/
+# nvr-edge 出厂基线:40M 二进制,每换一版仓库就多一份历史。
+# 由 debian/sync-nvr-edge.sh 从 nvr-edge 的 `make baseline` 产物装入(集成约定第 6 节),
+# VERSION 一并排除,避免它与本地实际装着的二进制对不上
+/debian/overlay-nvr/usr/local/lib/nvr/nvr-edge
+/debian/overlay-nvr/usr/local/lib/nvr/VERSION
 /external/rknpu2/
 /external/rknn-toolkit2/
 /external/security/
