@@ -237,6 +237,12 @@ RouteMetric=100
 # 重新生成 machine-id,DHCP 服务器当成新设备另发地址。实测同一块板刷几次换了三个 IP,
 # 出厂重刷或现场恢复出厂后依赖固定 IP 的对接方会断
 ClientIdentifier=mac
+# 主机名由 nvr-hostname 按 SN 定为 UMI-<后 6 位>,不让 DHCP 下发的主机名覆盖;
+# 不关的话 networkd 每次拿到租约都去改主机名,被拒后报 "Could not set hostname: Access denied"
+UseHostname=no
+
+[DHCPv6]
+UseHostname=no
 EOF
 sudo tee $TARGET_ROOTFS_DIR/etc/systemd/network/08-usb-eth.network > /dev/null <<'EOF'
 [Match]
@@ -247,6 +253,10 @@ DHCP=yes
 
 [DHCPv4]
 RouteMetric=2000
+UseHostname=no
+
+[DHCPv6]
+UseHostname=no
 EOF
 
 # NTP:不配则吃编译进去的 FallbackNTP(debian.pool.ntp.org)。实测设备在国内会先
