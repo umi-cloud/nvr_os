@@ -87,3 +87,7 @@ GTAGS
 *.orig
 *~
 \#*#
+
+# make.sh 打 FIT(uboot.img)时生成的中间产物,文件名随 BL31 加载地址变化
+/*.bin.digest
+/*.bin.gz
