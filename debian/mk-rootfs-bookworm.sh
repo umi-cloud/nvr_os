@@ -150,8 +150,8 @@ sudo cp -pf packages/$ARCH/mpp/librockchip-mpp1_*.deb \
 	packages/$ARCH/gst-plugins-bad1.0/gstreamer1.0-plugins-bad_1.22*.deb \
 	packages/$ARCH/gst-plugins-bad1.0/libgstreamer-plugins-bad1.0-0_1.22*.deb \
 	$TARGET_ROOTFS_DIR/packages/
-# NPU runtime v2.3.2(airockchip/rknn-toolkit2,配 6.1 内核 rknpu 驱动 0.9.8)
-sudo cp -rpf packages/$ARCH/rknpu2/rknpu2-rk356x-v2.3.2 $TARGET_ROOTFS_DIR/packages/rknpu2
+# NPU runtime v2.5.0(airockchip/rknn-toolkit2,配 6.1 内核 rknpu 驱动 0.9.8;2026-10-21 由 2.3.2 升级,SATA 板实测无驱动版本警告)
+sudo cp -rpf packages/$ARCH/rknpu2/rknpu2-rk356x-v2.5.0 $TARGET_ROOTFS_DIR/packages/rknpu2
 
 # apt 源:packages/apt-mirror-bookworm 有内容则全走本地快照(严格钉版、离线可复现);
 # 否则在线构建并在结束后自动把本次下载的全部 deb 捕获入镜像目录
@@ -263,6 +263,9 @@ export DEBIAN_FRONTEND=noninteractive
 APT_INSTALL="apt-get install -y --no-install-recommends"
 
 apt-get update
+# debootstrap 基底缓存里的包(perl-base、liblzma5、libpcre2、tzdata 等)只靠 install 不会升级,
+# 清空 apt 快照联网重建时也拿不到安全更新;离线时只从本地快照取版本,不影响可复现
+apt-get -y upgrade
 
 # 基础系统 + 网络 + ssh + 存储/调试工具(headless,本板无 WiFi/BT)
 ${APT_INSTALL} systemd-sysv systemd-timesyncd udev dbus kmod sudo locales \
@@ -300,7 +303,7 @@ dpkg-deb --fsys-tarfile /packages/gstreamer1.0-plugins-bad_1.22*.deb | tar -x -C
 dpkg-deb --fsys-tarfile /packages/libgstreamer-plugins-bad1.0-0_1.22*.deb | tar -x -C / \
 	--wildcards "./usr/lib/aarch64-linux-gnu/libgstcodecparsers-1.0.so.0*"
 
-# NPU: rknn_server + librknnrt(v2.3.2)
+# NPU: rknn_server + librknnrt(v2.5.0)
 install -m755 /packages/rknpu2/rknn_server /packages/rknpu2/start_rknn.sh /packages/rknpu2/restart_rknn.sh /usr/bin/
 install -m644 /packages/rknpu2/librknnrt.so /usr/lib/
 ldconfig
