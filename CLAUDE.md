@@ -210,7 +210,9 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   是 `rockdev/rootfs.img` 的真正来源(`mk-image.sh` 硬编码此输出名);`debian/binary/` 是
   bookworm 脚本的 `TARGET_ROOTFS_DIR`。`overlay/`、`overlay-firmware/`、
   `overlay-debug/` 是 Rockchip 原始素材,bookworm 构建脚本按需取用后再裁剪
-  (如 overlay-firmware 是全量 linux-firmware,复制后只留 rockchip),**不要按名字误删**
+  (如 overlay-firmware 是全量 linux-firmware,复制后只留 rockchip),**不要按名字误删**。
+  rootfs 自 2026-10-21 起按 **release** 构建(build.sh 传 `VERSION=release`),不再带 overlay-debug
+  (rockchip-test、demo、测试视频等);产测依赖的 memtester 已复制到 `overlay-nvr/usr/local/bin/`
 - 基底缓存 `debian/bookworm-base-arm64.tar.gz`,删掉会重新 debootstrap;**不入库**(~130M),
   新机器首次构建需联网跑一次 debootstrap,之后装包全走本地 apt 镜像
 - recovery:`./docker/run.sh ./build.sh recovery` 已在容器内打通(容器重编 output,含 6.1 内核);

@@ -1366,7 +1366,8 @@ function build_debian(){
 		ln -rsf linaro-$RK_DEBIAN_VERSION-alip-*.tar.gz linaro-$RK_DEBIAN_VERSION-$ARCH.tar.gz
 	fi
 
-	VERSION=debug ARCH=$ARCH ./mk-rootfs-$RK_DEBIAN_VERSION.sh
+	# release:不带 overlay-debug(rockchip-test、demo、测试视频等);产测要的 memtester 已放进 overlay-nvr
+	VERSION=release ARCH=$ARCH ./mk-rootfs-$RK_DEBIAN_VERSION.sh
 	./mk-image.sh
 
 	finish_build

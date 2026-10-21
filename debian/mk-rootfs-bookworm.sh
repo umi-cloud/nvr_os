@@ -1,7 +1,7 @@
 #!/bin/bash -e
 
 # NVR headless Debian 12 (bookworm, glibc 2.36) rootfs
-# 调用约定与 mk-rootfs-bullseye.sh 一致: VERSION=debug ARCH=arm64 ./mk-rootfs-bookworm.sh
+# 调用约定与 mk-rootfs-bullseye.sh 一致: VERSION=release ARCH=arm64 ./mk-rootfs-bookworm.sh
 # 差异: 不依赖 linaro 桌面基底,直接 debootstrap;不装 X/桌面;
 #       安装硬件加速组件: mpp / rga / rknpu2 / libmali(g24p0-x11-wayland-gbm,同时支持 GBM/X11/Wayland)
 

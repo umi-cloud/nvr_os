@@ -57,6 +57,7 @@ RK809 与 HYM8563 的 RTC 取舍、电源域、RGMII 时延、ISP/CSI 链禁用�
 | `usr/local/lib/nvr/nvr-edge` + `VERSION` | 出厂基线主程序与版本记录 |
 | `usr/local/lib/vsync/vsync` | vsync 出厂基线 |
 | `usr/local/sbin/nvr-provision` | 产线写 SN 与两个 MAC 到 vendor storage |
+| `usr/local/bin/memtester` | 取自 Rockchip `overlay-debug`(4.5.0),产测 ddr 项与老化要用;rootfs 改 release 构建后不再带 overlay-debug |
 | `usr/local/sbin/nvr-factory` + `usr/local/lib/nvr-factory/` | 产测:按 vendor 区阶段标记决定开机行为,单板自动测试、tty1 显示、写号与出厂收尾 |
 | `etc/nvr/factory.conf` | 产测判定阈值 |
 | `usr/lib/systemd/system/*.service.d/10-nvr-factory.conf` | 产测期间不启动 getty@tty1、nvr、vsync |
@@ -82,6 +83,7 @@ systemd-run 代执行挂盘与写网络配置),改之前先读该文件的注释
 | `rv1126b/BoardConfig-rv1126b-nvr-sata-v1.0.mk` | 新增,RV1126B 自研 SATA 板(双网口,SATA 走 JMS578 USB3 桥);2026-10-21 替代 Luckfox Aura 开发板板型 |
 | `rv1126b/parameter-nvr.txt` | 软链到 `rk356x/parameter-nvr.txt`,与 rk3566 共用分区表 |
 | `rv1126b/parameter.txt`、`boot.its`、`boot4recovery.its` | 取自官方 rv1126b SDK,未改 |
+| `common/build.sh` | rootfs 改为 `VERSION=release` 构建(原 debug,会带 overlay-debug 的 rockchip-test、demo 与测试视频) |
 
 其余 BoardConfig 与 `parameter-buildroot-*` 已于 2026-09-08 随旧板下线删除。
 
