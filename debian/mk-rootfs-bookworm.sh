@@ -233,6 +233,10 @@ DHCP=yes
 
 [DHCPv4]
 RouteMetric=100
+# 按 MAC 标识客户端,不用默认的 DUID —— DUID 由 /etc/machine-id 派生,而整包重刷会
+# 重新生成 machine-id,DHCP 服务器当成新设备另发地址。实测同一块板刷几次换了三个 IP,
+# 出厂重刷或现场恢复出厂后依赖固定 IP 的对接方会断
+ClientIdentifier=mac
 EOF
 sudo tee $TARGET_ROOTFS_DIR/etc/systemd/network/08-usb-eth.network > /dev/null <<'EOF'
 [Match]
@@ -287,6 +291,8 @@ apt-get -y upgrade
 ${APT_INSTALL} systemd-sysv systemd-timesyncd udev dbus kmod sudo locales \
 	ca-certificates bash-completion \
 	ethtool \
+	iptables \
+	docker.io \
 	iputils-ping curl wget openssh-server \
 	parted dosfstools e2fsprogs \
 	smartmontools \

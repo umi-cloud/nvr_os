@@ -1,0 +1,9 @@
+{
+  "data-root": "/userdata/docker",
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "16m",
+    "max-file": "3"
+  },
+  "storage-driver": "overlay2"
+}
