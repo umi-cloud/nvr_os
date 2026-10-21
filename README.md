@@ -22,7 +22,7 @@ docs、u-boot、tools、buildroot、rkbin 七份,外加 kernel 的完整 `.git` 
 |---|---|---|---|
 | `prebuilts/gcc/` | 1.4G | **是**,内核与 vendor_storage 交叉编译 | Rockchip SDK 原始 `prebuilts` 仓,或 ARM 官方 aarch64-none-linux-gnu 工具链 |
 | `debian/overlay-firmware/` | 565M | **是**,rootfs 构建时复制后裁剪出 rockchip 子集 | 上游 linux-firmware,或 Rockchip SDK 原始 debian 仓 |
-| `external/rknpu2/` | 813M | 否,rootfs 取的是 `debian/packages/arm64/rknpu2/` 那份 | Rockchip rknpu2 发布页 |
+| `external/rknpu2/` | 813M | **产测固件需要**:产测 NPU 自检取它的头文件与测试模型;运行库仍取 `debian/packages/arm64/rknpu2/` 那份 | Rockchip rknpu2 发布页 |
 | `external/rknn-toolkit2/` | 277M | 否,PC 侧模型转换工具 | 同上 |
 | `external/security/` | 105M | 否 | Rockchip SDK |
 | `docs/Common/` | 533M | 否,厂商 PDF 参考资料 | Rockchip 官方文档包 |
@@ -42,6 +42,7 @@ docker build --network=host -t nvr-os-builder:20.04 docker/
 ./build.sh updateimg                 # 整机包 rockdev/update.img
 ```
 
-选板见 `./build.sh lunch`,现有三块:`rk3566-nvr-ddr3-v1.0`(无 SATA)、
-`rk3566-nvr-ddr3-sata-v1.0`(SATA,默认)与 `rv1126b-evb1-v10`(RV1126B 官方 EVB
-标准配置,仅打通构建链,自研版型未定)。各板固件不通用,细节见 CLAUDE.md。
+选板见 `./build.sh lunch`,现有四块:`rk3566-nvr-ddr3-v1.0`(无 SATA,单网口)、
+`rk3566-nvr-ddr3-sata-v1.0`(SATA,双网口,默认)、`rv1126b-evb1-v10`(RV1126B 官方 EVB
+标准配置,仅打通构建链)与 `rv1126b-nvr-sata-v1.0`(RV1126B 自研 SATA 板,双网口,
+SATA 走 USB3-SATA 桥;依原理图建档,真机未验)。各板固件不通用,细节见 CLAUDE.md。

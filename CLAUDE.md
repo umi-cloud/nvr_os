@@ -1,8 +1,10 @@
 # nvr-os — RK3566 / RV1126B Linux SDK
 
-主线是 RK3566;RV1126B 于 2026-09-16 接入,目前只有官方 EVB 标准配置(u-boot + 内核可编),
-自研版型未定,真机未验。单内核单 rootfs:
-- `kernel/`:6.1(armbian 官方镜像 `rk-6.1-rkr6.1` = `linux-6.1-stan-rkr6.1`,无需账号)
+主线是 RK3566;RV1126B 于 2026-09-16 接入,自研 SATA 版型 `rv1126b-nvr-sata-v1.0` 于 2026-10-21
+按原理图建档,**真机未验**(此前验证软件栈用的 Luckfox Aura 开发板板型已同日删除,
+实测结论保留在 git 历史与新板 dts 注释里)。单内核单 rootfs:
+- `kernel/`:6.1.172(armbian 官方镜像 `rk-6.1-rkr7.2`,无需账号)。2026-10-21 由 `rk-6.1-rkr6.1`(6.1.118)升级,
+  旧树原样备份在 `/data/backup/nvr-os-kernel-rkr61-20261021/`(含当时未提交改动的补丁与回退说明)
 - rootfs:Debian 12 bookworm headless
 
 由 BoardConfig 的 `RK_KERNEL_DIR=kernel` 指定(也是 build.sh 的默认值)。
@@ -16,7 +18,8 @@
   `RK_KERNEL_DEFCONFIG_FRAGMENT="rk3566.config nvr.config"`。漏了会只编 mali400(Utgard),
   与 G52 不匹配 → 无 `/dev/mali0`、GLES/OpenCL 全废
 - 用户态 libmali-bifrost-g52-**g24p0**-x11-wayland-gbm(同时支持 GBM/X11/Wayland),
-  与内核 kbase **g25p0** 相邻代配对。实测 EGL 1.5、GLES 3.2、OpenCL 3.0 全通过,
+  内核 kbase 为 **g29p1**(rkr7.2;rkr6.1 时为 g25p0),g52 没有 g29p1 配套用户态库,但 2026-10-21 实测
+  g24p0 配 g29p1 可用(OpenCL 向量加法正确、EGL 1.5、GLES 3.2)。早先在 g25p0 上实测 EGL 1.5、GLES 3.2、OpenCL 3.0 全通过,
   X11 路径为 DRI3(依赖 libxcb-dri3/present/xfixes,构建脚本已带)
 - 备注:官方 6.1 SDK 脚本默认给 rk356x 选 g13p0(EGL 1.4、2020 年库),包目录里留有其 deb 作回退
 - 不要用 gbm-only 变体:它只导出 `EGL_KHR_platform_gbm`,Chromium(X11)和 cog/cage(Wayland)全废
@@ -27,9 +30,10 @@
   旧写法 `eglGetDisplay(gbm_dev)` 在 gbm-only 变体上能用,换成多平台变体后会被误判为 X11 Display* 而崩溃;
   传 `EGL_DEFAULT_DISPLAY` 则 eglInitialize 失败
 - 实测:GL_RENDERER=Mali-G52、OpenGL ES 3.2;OpenCL 3.0 设备 Mali-G52 r1p0
-- GPU DVFS:rk356x.dtsi 的 gpu_opp_table 漏了每条 OPP 的 `opp-supported-hw`(表级
-  `rockchip,supported-hw` 却在),会导致全部 OPP 被否 → 无 devfreq;板级 dts 已补齐,
-  现为 200/300/400/600/700MHz simple_ondemand(800MHz 档被 rk3566-box.dtsi 删除)
+- GPU DVFS:200/300/400/600/700MHz simple_ondemand(800MHz 档被 rk3566-box.dtsi 删除)。rkr6.1 时
+  rk356x.dtsi 留着表级 `rockchip,supported-hw` 却注释掉了每条 OPP 的 `opp-supported-hw`,板级 dts 曾补回掩码;
+  rkr7.2 的 rk3566.dtsi 改为删掉表级属性,**板级 dts 不能再给 GPU OPP 带掩码**,否则 GPU 丢光 OPP、无 devfreq。
+  dmc_opp_table 的掩码仍要留着(上游没动 dmc 表)
 
 ## 视频编解码(MPP + GStreamer)
 
@@ -40,7 +44,7 @@
   验证基准(SATA 板,mpp 1.1.0):`mpi_enc_test` 720p H264/H265 报 87/84 fps(**旧 mpp 1.5.0 同一命令也是 87**,
   下面那条 285fps 是早期不同测法的数字,不要拿来对比),`mpi_dec_test` 720p H264 800+fps、H265 1270fps,
   gst 1080p I420 编→解闭环通过、RGA 0 报错。
-  NPU:rknpu 驱动 0.9.8 + librknnrt 2.3.2 已是上游最新;Mali kbase g25p0 不能单独升(g29p1 无配套 libmali)
+  NPU:rknpu 驱动 0.9.8 + librknnrt 2.5.0(2026-10-21 由 2.3.2 升级,0.9.8 驱动下实测无版本警告);Mali kbase 已随 rkr7.2 到 g29p1,libmali 仍为 g24p0(实测可配)
 - rootfs 内置 gst 1.22(tools/base/good)+ `gstreamer1.0-rockchip1` 插件:`mppvideodec` / `mpph264enc` /
   `mpph265enc` / `mppjpegdec|enc`,以及 kmssrc/rkximagesink;NVR 解码链示例:
   `rtspsrc ! rtph264depay ! h264parse ! mppvideodec ! kmssink`
@@ -49,7 +53,7 @@
   (mpi_enc_test 都崩);版本号相同不代表构建相同,以实测为准
 - **勿装 gstreamer1.0-plugins-bad 元包**(依赖链拖入 LLVM/GTK/flite 约 300M):
   h264/h265parse 与 kmssink 由构建脚本从 bad 的 deb 中定向抽取
-- apt 包本地镜像:`packages/apt-mirror-bookworm/`(361 deb,157M)。镜像非空时构建只用
+- apt 包本地镜像:`packages/apt-mirror-bookworm/`(308 deb,141M,2026-10-21 联网重捕获,含 bookworm-security 截至当日的更新)。镜像非空时构建只用
   file:// 本地源(严格钉版、离线可建);要升级基础包版本,清空该目录联网重建一轮即自动重捕获
 - 基准(实测):H264 硬编 720p 285fps/硬解 445fps;H265 硬编 113fps/硬解 712fps(720p),gst 1080p 闭环通过;快速自检
   `mpi_enc_test -w 640 -h 480 -t 7 -n 10 -o /tmp/s.h264` 应输出非零码流
@@ -64,20 +68,24 @@ NTP 源钉阿里云(`/etc/systemd/timesyncd.conf.d/10-nvr.conf`:`ntp.aliyun.com 
 cn.pool 兜底)——Debian 默认池会先连试境外 IPv6 地址超时数轮,无 RTC 的板子这段时间只能用旧时间。
 注意 ntp2~ntp7.aliyun.com 与 ntp.aliyun.com 是同一个 anycast 地址,列多个不增加冗余。
 RTC:无 SATA 板无 RTC,靠 systemd-timesyncd clock file(每分钟落盘)恢复时间;
-SATA 板**用 RK809 内置 RTC**(rk808-rtc = rtc0,内核 hctosys/systohc 直接读写)。板上的 HYM8563
-(i2c1@0x51)节点保留但 disabled:两颗同时注册时 RK809 作为 MFD 子设备先抢 rtc0,
-`aliases { rtc0 = &hym8563 }` 无效(内核报 `/aliases ID 0 not available`)。要换回 HYM8563 须同时关
-`CONFIG_RTC_DRV_RK808`。fake-hwclock 已从 rootfs 裁掉。
+SATA 板**用外挂 HYM8563**(i2c1@0x51,CR1220 纽扣电池备电,rtc0,内核 hctosys/systohc 直接读写)。
+2026-10-21 起从 RK809 内置 RTC 切过来:RK809 那颗**没有备电**,实测断电一夜读回出厂值 2017-08-04
+(断电两分钟能撑住只是靠电容)。两颗同时注册时 RK809 作为 MFD 子设备先抢 rtc0,
+`aliases { rtc0 = &hym8563 }` 无效,所以 nvr.config 关掉了 `CONFIG_RTC_DRV_RK808`。
+新板 HYM8563 从没写过时间时读出 2000 年,NTP 对时后内核十几秒内自动写入。fake-hwclock 已从 rootfs 裁掉。
 **DDR 调频(dmc)按板区分**:无 SATA 板开 auto-freq(324↔1056);**SATA 板 dmc 关闭、定频 1056**——
 该板开调频后随机 Oops(非法指令/PID 1 段错误),panic 时 cur_freq 均为 324MHz,loader 降 780 无改善,
 关 dmc 后 4 核+硬编压力与 memtester 1GB 全过。两板差异:无 SATA 板 dmc 的 center-supply 是 950mV 固定
 `vdd_fixed`(调频不动电压),SATA 板是 RK809 `vdd_logic` 900mV(真调压)。恢复调频的路径写在 SATA dts 注释里。
-TF 卡槽存在,sdmmc0 保持启用(dwmmc "No normal pinctrl" 告警无害)。
+TF 卡槽:**SATA 板没有**(2026-10-20 确认,产测不测 tf);无 SATA 板据早先记录有卡槽,待核实。
+sdmmc0 两块板都保持启用(dwmmc "No normal pinctrl" 告警无害)。
+USB:**OTG 口(fcc00000,usbdrd)只有 USB2**(box.dtsi 只接 u2phy0_otg、maximum-speed=high-speed,nvr dts 改为 host),
+插 USB3 U 盘也只跑 480M;**USB3 是 usbhost30(fd000000,combphy1)那个口**。产测 usb3 项要求 U 盘插在后者
 **adc-keys 已禁用**:box-demo 参考设计声明了 volume up/down 两个按键,本板没有,而该节点
 每 100ms 轮询一次 saradc 找按键(实测约每秒 10 次中断)。关掉后 saradc 无消费者,不再周期唤醒。
 看门狗 /dev/watchdog0 可用,**nvr-edge 需实现喂狗**。
 
-已完成:librknnrt 2.3.2(配 rknpu 0.9.8);首块板整机点亮验证(eMMC/网口/加速全家/分区自适应);
+已完成:librknnrt 2.5.0(配 rknpu 0.9.8);首块板整机点亮验证(eMMC/网口/加速全家/分区自适应);
 开机 logo 全程无缝(u-boot drm-logo 预留区页对齐 + 360px um 标志;2026-09-16 换树后
 该对齐由上游 `align_size = PAGE_SIZE` 提供,不再是本仓补丁);
 DDR 动态调频(opp 适配 DDR3 频点 + 使能 dfi + auto-freq-en=1,空闲 324MHz↔负载 1056MHz 实测闭环;
@@ -134,6 +142,42 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   卡死并冻结整机网络)。Debian 的 `73-usb-net-by-mac.link` 会抢先匹配 USB 网卡、盖掉 persistent 策略,
   这就是它原来每次开机 MAC 都变的原因。工具是官方
   `external/rktoolkit/vendor_storage.c`,构建期交叉编译进 `/usr/local/sbin`。**upgrade_tool 只能写 SN 不能写 MAC**
+- **产测 `nvr-factory`**(单板自动测试 + 扫码写号 + 120 分钟老化 + 组装后自动收尾;人工项未做):
+  开机由 `nvr-factory-stage.service` 读 vendor 区阶段标记(`VENDOR_CUSTOM_ID_20`):空且无 SN → 单板测试,
+  `pcba-pass` → **老化**(`AGING_MINUTES` 默认 120 分钟,3 路 memtester + NPU + 硬编码循环满载,每 10 秒巡检,
+  任一路报错或温度超 `AGING_THERMAL_MAX_C` 判失败;**必须一次开机连续跑满,中途断电下次从零重来**,
+  因为只有跑满才写 `aging-pass`),`aging-pass` → **组装后上电即自动收尾**(不快检不扫码,清现场、
+  阶段 → `shipped`,然后**重启**而非关机:组装工位若没上过电,第一次上电的就是用户)→ 正常启动;
+  ssh 手动 `nvr-factory finish` 仍默认关机。收尾清空 machine-id,DHCP 客户端标识随之变化,IP 会变;
+  **产测期间 getty@tty1、nvr、vsync 都不启动**(drop-in 条件)。
+  **工作灯约定**(板上只有工作灯 GPIO0_C3 可控,另一颗蓝灯 LED1 直接接 3.3V 是电源灯):单板测试中快闪、
+  老化中心跳闪、通过常亮、任何一步失败慢闪(1 秒)。老化架无显示器,只看这颗灯
+  ⚠ **开发板影响**:新刷机、没写过 SN 的板子开机会进产测、nvr-edge 不起来,开发时
+  `nvr-factory stage set shipped` 后重启;产测上线前已写过 SN 的板子不受影响。RV1126B 等未适配板型直接正常启动。
+  **运行时输出一律英文**(fbcon 只有西文字形;注释仍用中文)。tty1 顶部彩色结论栏 + 全部测试项与测量值,
+  内核只编 16x32 字体使 1080p 下可读(720p 一屏 22 行,SATA 板 13 项占 20 行,再加项要换布局)。
+  ⚠ tty1 画面依赖 nvr.config 2026-10-20 补的 `CONFIG_FB`/`DRM_FBDEV_EMULATION`:此前内核 FB 未开,
+  FRAMEBUFFER_CONSOLE 被 Kconfig 静默丢弃,HDMI 在内核起来后**没有任何画面**(只有 u-boot logo,且仅当开机时已接显示器)
+  **启动期间 HDMI 只显示 logo**:bootargs 不带 `console=tty1`(内核日志、systemd 启动状态只走串口),
+  且开 `FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER`,fbcon 等 tty1 第一次有文字(约 10 秒处 getty 登录提示,
+  或产测画面)才接管屏幕。SATA 板实测通过(2026-10-20)。开机时没接显示器则 u-boot 不出 logo,之后接上只见登录提示
+  ⚠ **HDMI 固定输出 RGB**(公共 dts 的 `&hdmi { force_output_bus_format_RGB; }`):新树 u-boot 在显示器支持
+  YCbCr444 时默认输出 YUV444,内核接管 logo 沿用它,与内核默认的 RGB 对不上,黑底显示成紫色
+  (2026-10-21 实测)。该属性只有 u-boot 读(u-boot 用的是内核 dtb),内核默认就是 RGB
+  ⚠ 只往 tty1 写字不够:fbcon 接管时的普通提交替换不掉 logo 图层,画面会停在 logo 上(getty 能切过去是因为
+  它把终端重置回文本模式)。`nvr-factory` 的 `fb_show` 用 perl 发 KDSETMODE 图形→文本触发强制提交,其他要上屏的程序照此处理
+  **写号用扫码枪插主板**:主板贴预印条码(SN + 两个 MAC,条码里先 MAC1 千兆、后 MAC2 USB 网口),单板全过后
+  屏幕提示扫码,`nvr-factory` 从 tty1 读一行、严格解析(对不上的片段整条拒绝,提示重扫)后调 nvr-provision。
+  不能防重号(板子看不到别的板)。真实条码格式待拿到标签核对;带 `MAC1:` 之类文字前缀的格式目前会被拒。
+  明细 JSON 在 `/run/nvr-factory/`,ssh 上也可调 `nvr-factory result/provision/finish`。
+  屏幕与工作灯只在产测模式(`/run/nvr-factory/active` 存在)下才动:出厂后 ssh 调 `nvr-factory test`
+  排查问题不会弄乱用户的 HDMI 画面和灯
+  写号只认本次开机**完整跑完且无跳过项**的 PASS。判定阈值在 `/etc/nvr/factory.conf`(DDR 容量等待按 BOM 校准)。
+  npu 项依赖构建时从 `external/rknpu2`(不入库)取头文件与 mobilenet 模型编出 `npu-check`,缺则该项判失败。
+  2026-10-20 在 SATA 板(4GB/64G eMMC,9 月 9 日内核)上从 /tmp 跑过 `test`:board/ddr/emmc/eth/usbeth/rtc/
+  npu/venc/thermal/watchdog 通过,单板约 75 秒(memtester 占 60 秒);旧版 mobilenet 模型在 librknnrt 2.3.2/2.5.0 上均可用,
+  单次推理约 5ms。sata/usb3/tf/hdmi 因没接工装盘、U 盘、TF 卡、显示器判失败,**这四项的通过路径未验证**。
+  阶段切换、systemd 单元、tty1 画面、写号与 finish 只在开发机上用替身跑过,未上板
 - **主机名** `UMI-<SN 后 6 位>`(`nvr-hostname.service` 每次开机幂等):两块板同名时路由器按主机名派同一 IP
 - **两个网口都走 DHCP,千兆 end0 优先**(`08-usb-eth.network` metric 2000,`10-lan.network` metric 100):
   两口同网段时内核只看 metric,相同会把 RTSP 和默认出口压到 100M 的 RTL8152 上(实测踩过)。
@@ -214,13 +258,24 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - ⚠ 切板与构建要分两条命令:`build.sh` 启动时就 source 了板级配置,
   `./build.sh <BoardConfig>.mk uboot` 会用**切板前**的配置去编,编出来的是上一块板的固件
 - 区分逻辑:芯片级(`RK_UBOOT_DEFCONFIG`、rkbin loader)/ 板级(`RK_KERNEL_DIR` 选内核树 + `RK_KERNEL_DTS`,核心)/ 系统级(rootfs、分区表 parameter)
-- 现有板子(RK3566 两块 + RV1126B 一块,`rk356x/BoardConfig.mk` 默认项已改指 SATA 板):
-  - `BoardConfig-rk3566-nvr-ddr3-v1.0.mk`:NVR 无 SATA 板(硬件同为 V1.0,旧命名 v10 已统一为 v1.0),8颗 8bit DDR3,**kernel** + DTS `rk3566-nvr-ddr3-v1.0`(override 风格,基于官方 box-demo dtsi,含电源域 1.8V/RGMII 时延等实板参数)+ defconfig 片段 `nvr.config`
-  - `BoardConfig-rk3566-nvr-ddr3-sata-v1.0.mk`:NVR SATA 板(原理图 UMI-NVR-RK3566-V1.0),DTS `rk3566-nvr-ddr3-sata-v1.0` include 无 SATA 板 dts 只维护差异:SATA 硬盘位(sata2/combphy2,combphy1 保留 USB3 host)、RK809-5 PMIC(box.dtsi 占位 regulator 删除后按原 label 重建,vdd_cpu 仍 PWM 调压)、HYM8563 RTC、RK809 codec 声卡;内核配置与无 SATA 板完全一致
+- 现有板子(RK3566 两块 + RV1126B 两块,`rk356x/BoardConfig.mk` 默认项已改指 SATA 板):
+  - `BoardConfig-rk3566-nvr-ddr3-v1.0.mk`:NVR 无 SATA 板(硬件同为 V1.0,旧命名 v10 已统一为 v1.0),单网口(千兆 gmac1),8颗 8bit DDR3,**kernel** + DTS `rk3566-nvr-ddr3-v1.0`(override 风格,基于官方 box-demo dtsi,含电源域 1.8V/RGMII 时延等实板参数)+ defconfig 片段 `nvr.config`
+  - `BoardConfig-rk3566-nvr-ddr3-sata-v1.0.mk`:NVR SATA 板(原理图 UMI-NVR-RK3566-V1.0),双网口(千兆 gmac1 + 板载 USB 百兆 RTL8152,见下文网口章节),DTS `rk3566-nvr-ddr3-sata-v1.0` include 无 SATA 板 dts 只维护差异:SATA 硬盘位(sata2/combphy2,combphy1 保留 USB3 host)、RK809-5 PMIC(box.dtsi 占位 regulator 删除后按原 label 重建,vdd_cpu 仍 PWM 调压)、HYM8563 RTC、RK809 codec 声卡;内核配置与无 SATA 板完全一致
   - `rv1126b/BoardConfig-rv1126b-evb1-v10.mk`:RV1126B 官方 EVB1 V10 标准配置,DTS `rv1126b-evb1-v10`
     (官方树自带),内核 defconfig `rv1126b_defconfig`。**仅验证到能编出 uboot.img 与 boot.img**,
-    rootfs/固件打包与真机启动都未做;`RK_CFG_BUILDROOT`/`RK_CFG_RECOVERY` 留空(buildroot 无 rv1126b 配置)。
-    自研 SATA 版型另建 BoardConfig——RV1126B **无原生 SATA**,录像盘走 USB3-SATA 桥,与 RK3566 的 sata2/combphy2 完全不同
+    rootfs/固件打包与真机启动都未做;`RK_CFG_BUILDROOT`/`RK_CFG_RECOVERY` 留空(buildroot 无 rv1126b 配置)
+  - `rv1126b/BoardConfig-rv1126b-nvr-sata-v1.0.mk`:NVR RV1126B SATA 板(原理图 UMI-NVR-RV1126B-V1.0,2026-10-21 建档,
+    **真机未验**)。DTS `rv1126b-nvr-sata-v1.0`(独立 dts 不 include EVB dtsi,电源树照官方 EVB1 V12:
+    CPU PWM 调压 + RK801 PMIC 供 NPU/LOGIC/DDR/1V8/3V3)+ 片段 `rv1126b-nvr.config`(在 Aura 片段基础上加
+    SCSI/USB 存储/UAS、RTL8152、motorcomm/realtek PHY、gpio-leds)。
+    硬件:LPDDR3、eMMC 系统盘、SoC 内置 RTC(CR1220 备电)、千兆 RGMII(YT8531C/RTL8211F 二选一,
+    **M1 引脚组**,PHY 25M 由 SoC 输出,复位 GPIO5_B4)、USB 百兆 RTL8152B。
+    **RV1126B 无原生 SATA**:硬盘走 JMS578 USB3-SATA 桥——SS 对接 dwc3(固定 host,USB2 对接 PL2586 hub,
+    hub 下游 2 个 USB-A + RTL8152B),JMS578 的 USB2 对接 EHCI 作降级。盘在系统里是 USB(UAS)盘,
+    产测的 sata 项与 nvr-edge 挂盘逻辑若按 /dev/sda 的 SATA 属性判断需适配。
+    灯:work-led GPIO5_D7(低有效,产测用)、power-led GPIO5_D6(回路经硬盘 DAS 脚,不插盘不亮)。
+    无 SD 卡槽、无 USB-C 下载口(MaskRom 烧录)、音频与 WiFi 模组位未配。
+    **上板待办**:RGMII 时延标定(现为 EVB 值,Aura 上这组值丢包 25%)、LED/PHY 复位极性、DAS 空闲电平
 - ⚠ **两块板的固件不通用,烧前先确认 `.BoardConfig.mk` 软链指向哪块**。SATA 板 dts 会
   `/delete-node/` 掉 `vcc_1v8`/`vcc_3v3` 等固定 regulator,改由 i2c0 上的 RK809 提供;
   这份固件烧到无 SATA 板上,PMIC 不存在 → regulator 全缺 → `pmu_io_domains` 配不起来 →
@@ -236,7 +291,7 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - **外层 `git add .` 不会收编子仓库内容**(只记 gitlink),勿直接全量提交
 - 所有定制改动已提交在各子仓库的 `nvr-custom` 分支(u-boot、buildroot、debian、device/rockchip、docs、tools 等);新改动继续提交到对应子仓库的 `nvr-custom`
 - `kernel/` 不归 repo 工具管(与 5.10 时代不同),是独立 git 克隆(remote 为 armbian/linux-rockchip,可拉取更新),定制同样在 `nvr-custom` 分支
-- 与官方基线对比:`git -C kernel diff origin/rk-6.1-rkr6.1 nvr-custom`
+- 与官方基线对比:浅克隆 armbian `rk-6.1-rkr7.2`,按 `git ls-files` 逐文件比对(做法见 docs/nvr-customizations.md 上游更新状态一节)
 - 不入库:`buildroot/output/`(50G 构建产物)、`buildroot/dl/`、`rockdev/`、`.repo/`
 - 子仓库远程指向 Rockchip Gerrit,不可推送
 - **改了 SDK 里的文件,同步更新 [`docs/nvr-customizations.md`](docs/nvr-customizations.md)**:
