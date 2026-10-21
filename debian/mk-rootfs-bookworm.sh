@@ -253,6 +253,8 @@ DHCP=yes
 
 [DHCPv4]
 RouteMetric=2000
+# 同千兆口:按 MAC 标识客户端,重刷或收尾清空 machine-id 后 IP 不变(MAC 来自厂商区,固定)
+ClientIdentifier=mac
 UseHostname=no
 
 [DHCPv6]
