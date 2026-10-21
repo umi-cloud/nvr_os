@@ -1,7 +1,7 @@
 #!/bin/bash
-# Luckfox Aura (RV1126B) 开发板:验证 RV1126B 软件栈用,不是出货版型
-# 系统盘为板载 eMMC 64GB,整包经 USB-C(Loader/MaskRom 模式)烧录;MicroSD 为扩展;无 SATA、无 USB3
-# dts 依据 Luckfox 公开原理图(外设页)与官网规格自写,点亮级:串口/eMMC/SD/网口/USB
+# NVR 板 RV1126B SATA 版(原理图 UMI-NVR-RV1126B-V1.0):LPDDR3、eMMC 系统盘、RK801 PMIC、
+# 双网口(千兆 RGMII + 板载 USB 百兆 RTL8152B)、SATA 硬盘位走 JMS578 USB3-SATA 桥(RV1126B 无原生 SATA)。
+# 烧录走 MaskRom(板上无 USB-C 下载口)。dts 依原理图自写,未上真机。
 
 # Target arch
 export RK_ARCH=arm64
@@ -18,9 +18,9 @@ export RK_UBOOT_FORMAT_TYPE=fit
 # ---- Kernel ----
 export RK_KERNEL_DIR=kernel
 export RK_KERNEL_DEFCONFIG=rv1126b_defconfig
-# 板级片段:开 RGMII delay 标定工具(rv1126b_defconfig 的 MINI_KERNEL 把它关了)
-export RK_KERNEL_DEFCONFIG_FRAGMENT="rv1126b-luckfox-aura.config"
-export RK_KERNEL_DTS=rv1126b-luckfox-aura
+# 板级片段:SATA(USB 存储/UAS)、RTL8152、PHY 驱动、LED、MPP、容器等,见文件头注释
+export RK_KERNEL_DEFCONFIG_FRAGMENT="rv1126b-nvr.config"
+export RK_KERNEL_DTS=rv1126b-nvr-sata-v1.0
 export RK_KERNEL_IMG=kernel/arch/arm64/boot/Image
 export RK_BOOT_IMG=boot.img
 # boot 打包为 FIT
