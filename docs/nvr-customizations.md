@@ -91,7 +91,7 @@ systemd-run 代执行挂盘与写网络配置),改之前先读该文件的注释
 |---|---|
 | `tools/linux/Linux_Pack_Firmware/rockdev/rk356x-nvr-package-file` | update.img 打包清单,`build.sh updateimg` 依赖 |
 | `tools/linux/Linux_Pack_Firmware/rockdev/rv1126b-package-file` | 新增,rv1126b 打包清单(暂不含 oem/userdata) |
-| `u-boot/` | 2026-09-16 整棵换为 rv1126b SDK(`rv1126b_linux6.1_release_v1.0.0_20250620`)的树,同为 2017.09 但含 rv1126b 支持;原先那处 drm-logo 页对齐改动上游已修(`align_size = PAGE_SIZE`),无需重打,故本目录现为纯原厂 |
+| `u-boot/` | 2026-09-16 整棵换为 rv1126b SDK(`rv1126b_linux6.1_release_v1.0.0_20250620`,原始包在 `/data/backup/sdk/`)的树,同为 2017.09 但含 rv1126b 支持;原先那处 drm-logo 页对齐改动上游已修(`align_size = PAGE_SIZE`),无需重打,故本目录现为纯原厂 |
 | `buildroot/fs/cpio/cpio.mk` | 一处改动 |
 | `docs/nvr-edge-integration.md` | rootfs 对下发组件承诺的 ABI 面 |
 | `docker/` | 编译环境,Dockerfile 与 run.sh,宿主机缺依赖必须走它 |

@@ -299,6 +299,8 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   rockchip-linux/rkbin 的 GitHub 镜像(做法见 docs/nvr-customizations.md 上游更新状态一节)
 - 5.10 内核及 libmali/rkwifibt/rkaiq/chromium/xserver 等老组件已随 2026-09-08 下线删除,需要时从
   `/data/backup/nvr-os-legacy-20260908/` 的 bundle 还原,或从 Rockchip 官方重新获取
+- Rockchip 原厂 SDK 原始包(RV1126B 2025-06、RK3576 2026-06,u-boot 与部分 rkbin 的来源,不一定能再下载):
+  `/data/backup/sdk/`
 - 换下来的旧内核树、烧写前的板子备份:`/data/backup/nvr-os-kernel-rkr61-20261021/`、
   `/data/backup/nvr-os-sata-board-flash-backup-20261021/`
 
