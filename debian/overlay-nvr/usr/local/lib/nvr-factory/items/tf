@@ -1,0 +1,12 @@
+#!/bin/bash
+# TF 卡槽:识别 + 读取
+. /usr/local/lib/nvr-factory/common.sh
+for b in /sys/block/mmcblk*; do
+	[ "$(cat "$b/device/type" 2>/dev/null)" = SD ] || continue
+	dev=${b##*/}
+	mbps=$(read_mbps "/dev/$dev" 32) || { echo "$dev read failed"; exit 1; }
+	echo "$dev read ${mbps}MB/s"
+	exit 0
+done
+[ "$TF_REQUIRED" = 1 ] || { echo "no card (not required)"; exit 0; }
+echo "no TF card found"; exit 1

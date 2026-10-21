@@ -1,0 +1,20 @@
+#!/bin/bash
+# eMMC:容量、两个数据分区已挂载、userdata 上写读校验(绕过页缓存)
+. /usr/local/lib/nvr-factory/common.sh
+dev=
+for b in /sys/block/mmcblk*; do
+	[ "$(cat "$b/device/type" 2>/dev/null)" = MMC ] && { dev=${b##*/}; break; }
+done
+[ -n "$dev" ] || { echo "no eMMC found"; exit 1; }
+gb=$(( $(cat "/sys/block/$dev/size") * 512 / 1000000000 ))
+[ "$gb" -ge "$EMMC_MIN_GB" ] || { echo "size ${gb}GB < ${EMMC_MIN_GB}GB"; exit 1; }
+for m in /userdata /vcache; do
+	findmnt -n "$m" >/dev/null || { echo "$m not mounted"; exit 1; }
+done
+f=/userdata/.nvr-factory-emmc
+trap 'rm -f "$f"' EXIT
+dd if=/dev/urandom of="$f" bs=1M count=32 conv=fsync 2>/dev/null || { echo "write failed"; exit 1; }
+want=$(sha256sum < "$f")
+got=$(dd if="$f" bs=1M iflag=direct 2>/dev/null | sha256sum)
+[ "$want" = "$got" ] || { echo "read-back mismatch"; exit 1; }
+echo "$dev ${gb}GB, write/read verify ok"

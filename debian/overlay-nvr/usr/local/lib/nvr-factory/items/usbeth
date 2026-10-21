@@ -1,0 +1,9 @@
+#!/bin/bash
+# SATA 板的板载 USB 百兆网口(RTL8152)。接口名不是稳定契约,按驱动找(见 CLAUDE.md 网口章节)
+. /usr/local/lib/nvr-factory/common.sh
+nic=
+for n in /sys/class/net/*; do
+	[ "$(basename "$(readlink -f "$n/device/driver" 2>/dev/null)")" = r8152 ] && nic=${n##*/} && break
+done
+[ -n "$nic" ] || { echo "no RTL8152 found"; exit 1; }
+nic_check "$nic" 100

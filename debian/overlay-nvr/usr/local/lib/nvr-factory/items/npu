@@ -1,0 +1,6 @@
+#!/bin/bash
+# NPU:固定输入连续推理多次,输出逐字节一致且非全零(供电/时钟不良时常见超时、报错或输出抖动)
+. /usr/local/lib/nvr-factory/common.sh
+[ -x "$NPU_BIN" ] && [ -f "$NPU_MODEL" ] || { echo "npu-check or model missing from image"; exit 1; }
+out=$("$NPU_BIN" "$NPU_MODEL" 10) || { echo "${out:-inference failed}"; exit 1; }
+echo "$out"

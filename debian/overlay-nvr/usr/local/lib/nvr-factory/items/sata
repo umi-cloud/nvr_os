@@ -1,0 +1,15 @@
+#!/bin/bash
+# SATA 硬盘位:识别到 ATA 盘 + 顺序读速率。只读不写,工装盘可反复使用
+. /usr/local/lib/nvr-factory/common.sh
+dev=
+for b in /sys/block/sd*; do
+	[ -e "$b" ] || continue
+	readlink -f "$b" | grep -q '/ata[0-9]' && { dev=${b##*/}; break; }
+done
+[ -n "$dev" ] || { echo "no SATA disk found"; exit 1; }
+spd=$(cat /sys/class/ata_link/link*/sata_spd 2>/dev/null | grep -v '<unknown>' | head -1)
+# 先读一小段:盘刚上电或休眠时首读含起转与寻道,实测 5400 转盘首读 44MB/s、之后 92MB/s
+read_mbps "/dev/$dev" 32 >/dev/null || { echo "$dev read failed"; exit 1; }
+mbps=$(read_mbps "/dev/$dev" 256) || { echo "$dev read failed"; exit 1; }
+[ "$mbps" -ge "$SATA_MIN_MBPS" ] || { echo "$dev read ${mbps}MB/s < ${SATA_MIN_MBPS}MB/s (link ${spd:-?})"; exit 1; }
+echo "$dev link ${spd:-?}, read ${mbps}MB/s"

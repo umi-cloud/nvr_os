@@ -1,0 +1,11 @@
+#!/bin/bash
+# HDMI:读到 EDID(说明 HPD 与 DDC 通);画面颜色是否正常由操作员看屏判定。
+# 不能看连接器 status:bootargs 的 video=HDMI-A-1:...e 强制打开输出,没接显示器也报 connected
+. /usr/local/lib/nvr-factory/common.sh
+c=$(ls -d /sys/class/drm/card*-HDMI-A-1 2>/dev/null | head -1)
+[ -n "$c" ] || { echo "no HDMI connector"; exit 1; }
+if [ "$(wc -c < "$c/edid")" -lt 128 ]; then
+	[ "$HDMI_REQUIRED" = 1 ] || { echo "no monitor (not required)"; exit 0; }
+	echo "no monitor (EDID empty)"; exit 1
+fi
+echo "connected $(head -1 "$c/modes")"

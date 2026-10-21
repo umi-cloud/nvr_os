@@ -1,0 +1,7 @@
+#!/bin/bash
+# 看门狗:设备节点在且 PID 1 已接管喂狗(system.conf.d RuntimeWatchdogSec);复位可靠性留给老化
+. /usr/local/lib/nvr-factory/common.sh
+[ -c /dev/watchdog0 ] || { echo "no /dev/watchdog0"; exit 1; }
+v=$(systemctl show -p RuntimeWatchdogUSec --value)
+[ -n "$v" ] && [ "$v" != 0 ] && [ "$v" != infinity ] || { echo "PID 1 not feeding ($v)"; exit 1; }
+echo "watchdog0 fed by PID 1 every $v"

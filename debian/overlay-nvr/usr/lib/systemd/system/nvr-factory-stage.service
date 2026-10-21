@@ -1,0 +1,15 @@
+[Unit]
+Description=NVR factory stage check
+# 读厂商区阶段标记,产测期间创建 /run/nvr-factory/active,
+# getty@tty1/nvr/vsync 的 drop-in 据此不启动(见 /usr/local/sbin/nvr-factory 文件头)
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target getty@tty1.service nvr.service vsync.service nvr-factory.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/nvr-factory boot
+
+[Install]
+WantedBy=sysinit.target

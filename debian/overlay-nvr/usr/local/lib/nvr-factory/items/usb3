@@ -1,0 +1,14 @@
+#!/bin/bash
+# USB3:工装 U 盘必须枚举在 SuperSpeed(插 USB2 盘或 USB3 差分线不良都只会跑在 480M)+ 顺序读
+. /usr/local/lib/nvr-factory/common.sh
+best=; bestspd=0
+for b in /sys/block/sd*; do
+	[ -e "$b" ] || continue
+	s=$(usb_speed_of "${b##*/}")
+	[ -n "$s" ] && [ "$s" -gt "$bestspd" ] && { best=${b##*/}; bestspd=$s; }
+done
+[ -n "$best" ] || { echo "no USB disk inserted"; exit 1; }
+[ "$bestspd" -ge 5000 ] || { echo "$best only ${bestspd}Mbps, not USB3"; exit 1; }
+mbps=$(read_mbps "/dev/$best" 128) || { echo "$best read failed"; exit 1; }
+[ "$mbps" -ge "$USB3_MIN_MBPS" ] || { echo "$best read ${mbps}MB/s < ${USB3_MIN_MBPS}MB/s"; exit 1; }
+echo "$best ${bestspd}Mbps, read ${mbps}MB/s"

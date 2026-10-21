@@ -1,0 +1,15 @@
+[Unit]
+Description=NVR factory test
+ConditionPathExists=/run/nvr-factory/active
+After=nvr-factory-stage.service systemd-networkd.service
+Wants=systemd-networkd.service
+
+[Service]
+# simple 而非 oneshot:单板测试要跑几分钟,oneshot 会撞默认 90 秒启动超时
+Type=simple
+ExecStart=/usr/local/sbin/nvr-factory auto
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

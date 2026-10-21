@@ -1,0 +1,5 @@
+#!/bin/bash
+# 千兆网口 end0:必须协商到 1000M 全双工(网线只通四芯会静默降到 100M,这是产线最常见的不良)
+# + 对网关 ping 零丢包
+. /usr/local/lib/nvr-factory/common.sh
+nic_check end0 1000

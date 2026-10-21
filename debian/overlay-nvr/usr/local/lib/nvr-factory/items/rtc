@@ -1,0 +1,14 @@
+#!/bin/bash
+# SATA 板 RTC:rtc0 必须是外挂 HYM8563(有纽扣电池备电;RK809 内置那颗无备电,断电一夜即丢),
+# 能写入、读回一致、在走时。掉电保持这里测不出(要断电很久),靠老化后开机核对时间
+. /usr/local/lib/nvr-factory/common.sh
+r=/sys/class/rtc/rtc0
+[ -d $r ] || { echo "no rtc0"; exit 1; }
+name=$(cut -d' ' -f1 $r/name)
+case "$name" in *hym8563*) ;; *) echo "rtc0 is $name, expected hym8563 (battery-backed)"; exit 1 ;; esac
+hwclock --systohc >&2 || { echo "$name write failed"; exit 1; }
+a=$(cat $r/since_epoch); sleep 2; b=$(cat $r/since_epoch)
+d=$(( $(date +%s) - b ))
+[ "${d#-}" -le 2 ] || { echo "$name read-back off by ${d}s"; exit 1; }
+[ $((b - a)) -ge 1 ] && [ $((b - a)) -le 3 ] || { echo "$name not ticking ($((b - a))s in 2s)"; exit 1; }
+echo "$name write/read ok, ticking"

@@ -1,0 +1,17 @@
+#!/bin/bash
+# 温度与 CPU 调频:温度不超限;切 performance 后 CPU 能升到当前允许的最高频点
+# (vdd_cpu 是 PWM 调压,调压回路不良时升不上去或直接崩)。
+# 75C 起内核温控会合法地压低 scaling_max_freq,所以对比的是它而不是 cpuinfo_max_freq,
+# 被压低时在结论里注明,否则高温环境下会误判
+. /usr/local/lib/nvr-factory/common.sh
+temp=$(max_temp_c)
+[ "$temp" -lt "$THERMAL_MAX_C" ] || { echo "temp ${temp}C >= ${THERMAL_MAX_C}C"; exit 1; }
+p=/sys/devices/system/cpu/cpufreq/policy0
+gov=$(cat $p/scaling_governor)
+trap 'echo "$gov" > $p/scaling_governor' EXIT
+echo performance > $p/scaling_governor
+sleep 1
+cur=$(cat $p/scaling_cur_freq); cap=$(cat $p/scaling_max_freq); top=$(cat $p/cpuinfo_max_freq)
+[ "$cur" = "$cap" ] || { echo "CPU at $((cur / 1000))MHz, allowed $((cap / 1000))MHz"; exit 1; }
+note=; [ "$cap" -lt "$top" ] && note=" (thermally capped, max $((top / 1000))MHz)"
+echo "${temp}C, CPU $((cur / 1000))MHz$note"

@@ -117,6 +117,22 @@ else
 	echo -e "\033[33m 未找到交叉编译器或 external/rktoolkit,跳过 vendor_storage \033[0m"
 fi
 
+# 产测 NPU 自检(nvr-factory/npu-check.c)与测试模型。头文件和模型取自 external/rknpu2
+# (不入库);缺了只告警,镜像照出,但产测的 npu 项会判失败,产测固件必须带上
+RKNPU2=../external/rknpu2
+NPU_MODEL=$RKNPU2/examples/rknn_common_test/model/RK356X/mobilenet_v1.rknn
+if [ -n "$CROSS_GCC" ] && [ -f $NPU_MODEL ]; then
+	$CROSS_GCC -O2 -o /tmp/npu-check.$$ nvr-factory/npu-check.c \
+		-I $RKNPU2/runtime/RK356X/Linux/librknn_api/include \
+		-L packages/$ARCH/rknpu2/rknpu2-rk356x-v2.5.0 -lrknnrt
+	sudo install -D -m 755 /tmp/npu-check.$$ $TARGET_ROOTFS_DIR/usr/local/lib/nvr-factory/npu-check
+	sudo install -m 644 $NPU_MODEL $TARGET_ROOTFS_DIR/usr/local/lib/nvr-factory/npu-check.rknn
+	rm -f /tmp/npu-check.$$
+	echo -e "\033[36m 产测 npu-check 已编入 \033[0m"
+else
+	echo -e "\033[31m 未找到交叉编译器或 external/rknpu2,产测 npu 项将判失败 \033[0m"
+fi
+
 # 串口 getty:Rockchip overlay 的 serial-getty@.service 写死 --autologin root,串口敲回车
 # 直接进 root shell、连密码都不要。去掉它,串口按 root/root 登录(CLAUDE.md 记的兜底方式)。
 sudo sed -i 's/ --autologin root//' $TARGET_ROOTFS_DIR/usr/lib/systemd/system/serial-getty@.service
@@ -393,6 +409,11 @@ fi
 
 if [ -f /lib/systemd/system/nvr-hostname.service ]; then
 	systemctl enable nvr-hostname.service
+fi
+
+# 产测:开机读厂商区阶段标记,未出厂的板子跑产测、不启动业务(见 /usr/local/sbin/nvr-factory)
+if [ -f /lib/systemd/system/nvr-factory.service ]; then
+	systemctl enable nvr-factory-stage.service nvr-factory.service
 fi
 
 # 串口控制台:内核 cmdline 是 console=tty1 console=ttyFIQ0,但 Debian 只自动启用

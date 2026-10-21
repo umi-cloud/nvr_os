@@ -1,0 +1,12 @@
+#!/bin/bash
+# 视频编解码:MPP 硬编 H.264 测试码流,再硬解回去。
+# mpp_log_level=2:mpp 默认逐帧写 syslog,只留错误
+. /usr/local/lib/nvr-factory/common.sh
+f=/tmp/nvr-factory-venc.h264
+trap 'rm -f "$f"' EXIT
+export mpp_log_level=2
+mpi_enc_test -w 1280 -h 720 -t 7 -n 60 -o "$f" >&2 || { echo "hw encode failed"; exit 1; }
+sz=$(stat -c %s "$f" 2>/dev/null || echo 0)
+[ "$sz" -gt 10240 ] || { echo "encoded stream too small (${sz}B)"; exit 1; }
+mpi_dec_test -t 7 -i "$f" >&2 || { echo "hw decode failed"; exit 1; }
+echo "720p H.264 encode ${sz}B, decode ok"
