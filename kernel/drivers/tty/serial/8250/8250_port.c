@@ -55,6 +55,14 @@
 #define DEBUG_AUTOCONF(fmt...)	do { } while (0)
 #endif
 
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+#if 0
+#define DEBUG_EM485(fmt...)	printk(fmt)
+#else
+#define DEBUG_EM485(fmt...)	do { } while (0)
+#endif
+#endif
+
 /*
  * Here we define the default xmit fifo size used for each type of UART.
  */
@@ -612,6 +620,11 @@ EXPORT_SYMBOL_GPL(serial8250_rpm_put);
  */
 static int serial8250_em485_init(struct uart_8250_port *p)
 {
+	
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	DEBUG_EM485("%s ttyS%d\n", __func__, p->port.line);
+#endif
+
 	if (p->em485)
 		goto deassert_rts;
 
@@ -1445,12 +1458,33 @@ void serial8250_em485_stop_tx(struct uart_8250_port *p)
 {
 	unsigned char mcr = serial8250_in_MCR(p);
 
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	int value = 0;
+
+	if (p->port.rs485_de_gpio) {
+		if (p->port.rs485.flags & SER_RS485_RTS_AFTER_SEND)
+			value = 0;
+		else
+			value = 1;
+
+		gpiod_set_value(p->port.rs485_de_gpio, value);
+		DEBUG_EM485("%s ttyS%d gpio:%d\n", __func__, p->port.line, value);
+	} else {
+		if (p->port.rs485.flags & SER_RS485_RTS_AFTER_SEND)
+			mcr |= UART_MCR_RTS;
+		else
+			mcr &= ~UART_MCR_RTS;
+		serial8250_out_MCR(p, mcr);
+		DEBUG_EM485("%s ttyS%d mcr:%02x\n", __func__, p->port.line, mcr);
+	}
+#else
+
 	if (p->port.rs485.flags & SER_RS485_RTS_AFTER_SEND)
 		mcr |= UART_MCR_RTS;
 	else
 		mcr &= ~UART_MCR_RTS;
 	serial8250_out_MCR(p, mcr);
-
+#endif
 	/*
 	 * Empty the RX FIFO, we are not interested in anything
 	 * received during the half-duplex transmission.
@@ -1494,6 +1528,10 @@ static void __stop_tx_rs485(struct uart_8250_port *p, u64 stop_delay)
 {
 	struct uart_8250_em485 *em485 = p->em485;
 
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	DEBUG_EM485("%s ttyS%d\n", __func__, p->port.line);
+#endif
+
 	stop_delay += (u64)p->port.rs485.delay_rts_after_send * NSEC_PER_MSEC;
 
 	/*
@@ -1531,6 +1569,9 @@ static inline void __stop_tx(struct uart_8250_port *p)
 		 * for emptying of the shift register.
 		 */
 		if (!(lsr & UART_LSR_TEMT)) {
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+			stop_delay = p->port.frame_time + 10000;
+#else			
 			if (!(p->capabilities & UART_CAP_NOTEMT))
 				return;
 			/*
@@ -1541,6 +1582,7 @@ static inline void __stop_tx(struct uart_8250_port *p)
 			 * Roughly estimate 1 extra bit here with / 7.
 			 */
 			stop_delay = p->port.frame_time + DIV_ROUND_UP(p->port.frame_time, 7);
+#endif
 		}
 
 		__stop_tx_rs485(p, stop_delay);
@@ -1611,14 +1653,33 @@ void serial8250_em485_start_tx(struct uart_8250_port *up)
 {
 	unsigned char mcr = serial8250_in_MCR(up);
 
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	int value = 0;
+#endif
+
 	if (!(up->port.rs485.flags & SER_RS485_RX_DURING_TX))
 		serial8250_stop_rx(&up->port);
+
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	if (up->port.rs485_de_gpio) {
+		if (up->port.rs485.flags & SER_RS485_RTS_ON_SEND)
+			value = 0;
+		else
+			value = 1;
+		gpiod_set_value(up->port.rs485_de_gpio, value);
+		DEBUG_EM485("%s ttyS%d gpio:%d\n", __func__, up->port.line, value);
+		return;
+	}
+#endif
 
 	if (up->port.rs485.flags & SER_RS485_RTS_ON_SEND)
 		mcr |= UART_MCR_RTS;
 	else
 		mcr &= ~UART_MCR_RTS;
 	serial8250_out_MCR(up, mcr);
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	DEBUG_EM485("%s ttyS%d mcr:%02x\n", __func__, up->port.line, mcr);
+#endif
 }
 EXPORT_SYMBOL_GPL(serial8250_em485_start_tx);
 
@@ -1711,7 +1772,7 @@ static void serial8250_disable_ms(struct uart_port *port)
 	if (up->bugs & UART_BUG_NOMSR)
 		return;
 
-	mctrl_gpio_disable_ms(up->gpios);
+	mctrl_gpio_disable_ms_no_sync(up->gpios);
 
 	up->ier &= ~UART_IER_MSI;
 	serial_port_out(port, UART_IER, up->ier);
@@ -1963,8 +2024,11 @@ int serial8250_handle_irq(struct uart_port *port, unsigned int iir)
 	if (status & (UART_LSR_DR | UART_LSR_BI)) {
 		int dma_err = -1;
 
-		if (up->dma && up->dma->rxchan)
+		if (up->dma && up->dma->rxchan) {
 			dma_err = handle_rx_dma(up, iir);
+			/* Clear lsr_saved_flags here, because it's not updated in handle_rx_dma */
+			up->lsr_saved_flags = 0;
+		}
 
 		if (!up->dma || dma_err)
 			status = serial8250_rx_chars(up, status);
@@ -2154,7 +2218,8 @@ static void serial8250_break_ctl(struct uart_port *port, int break_state)
 	serial8250_rpm_put(up);
 }
 
-static void wait_for_lsr(struct uart_8250_port *up, int bits)
+/* Returns true if @bits were set, false on timeout */
+static bool wait_for_lsr(struct uart_8250_port *up, int bits)
 {
 	unsigned int status, tmout = 10000;
 
@@ -2169,11 +2234,11 @@ static void wait_for_lsr(struct uart_8250_port *up, int bits)
 		udelay(1);
 		touch_nmi_watchdog();
 	}
+
+	return (tmout != 0);
 }
 
-/*
- *	Wait for transmitter & holding register to empty
- */
+/* Wait for transmitter and holding register to empty with timeout */
 static void wait_for_xmitr(struct uart_8250_port *up, int bits)
 {
 	unsigned int tmout;
@@ -2432,9 +2497,8 @@ int serial8250_do_startup(struct uart_port *port)
 	/*
 	 * Now, initialize the UART
 	 */
-	serial_port_out(port, UART_LCR, UART_LCR_WLEN8);
-
 	spin_lock_irqsave(&port->lock, flags);
+	serial_port_out(port, UART_LCR, UART_LCR_WLEN8);
 	if (up->port.flags & UPF_FOURPORT) {
 		if (!up->port.irq)
 			up->port.mctrl |= TIOCM_OUT1;
@@ -2593,6 +2657,12 @@ void serial8250_do_shutdown(struct uart_port *port)
 	 * the IRQ chain.
 	 */
 	serial_port_in(port, UART_RX);
+	/*
+	 * LCR writes on DW UART can trigger late (unmaskable) IRQs.
+	 * Handle them before releasing the handler.
+	 */
+	synchronize_irq(port->irq);
+
 	serial8250_rpm_put(up);
 
 	up->ops->release_irq(up);
@@ -2614,6 +2684,14 @@ static unsigned int npcm_get_divisor(struct uart_8250_port *up,
 	struct uart_port *port = &up->port;
 
 	return DIV_ROUND_CLOSEST(port->uartclk, 16 * baud + 2) - 2;
+}
+
+static void serial8250_flush_buffer(struct uart_port *port)
+{
+	struct uart_8250_port *up = up_to_u8250p(port);
+
+	if (up->dma)
+		serial8250_tx_dma_flush(up);
 }
 
 static unsigned int serial8250_do_get_divisor(struct uart_port *port,
@@ -3376,6 +3454,7 @@ static const struct uart_ops serial8250_pops = {
 	.break_ctl	= serial8250_break_ctl,
 	.startup	= serial8250_startup,
 	.shutdown	= serial8250_shutdown,
+	.flush_buffer	= serial8250_flush_buffer,
 	.set_termios	= serial8250_set_termios,
 	.set_ldisc	= serial8250_set_ldisc,
 	.pm		= serial8250_pm,
@@ -3466,6 +3545,16 @@ static void serial8250_console_restore(struct uart_8250_port *up)
 	serial8250_out_MCR(up, up->mcr | UART_MCR_DTR | UART_MCR_RTS);
 }
 
+static void fifo_wait_for_lsr(struct uart_8250_port *up, unsigned int count)
+{
+	unsigned int i;
+
+	for (i = 0; i < count; i++) {
+		if (wait_for_lsr(up, UART_LSR_THRE))
+			return;
+	}
+}
+
 /*
  * Print a string to the serial port using the device FIFO
  *
@@ -3475,13 +3564,15 @@ static void serial8250_console_restore(struct uart_8250_port *up)
 static void serial8250_console_fifo_write(struct uart_8250_port *up,
 					  const char *s, unsigned int count)
 {
-	int i;
 	const char *end = s + count;
 	unsigned int fifosize = up->tx_loadsz;
+	unsigned int tx_count = 0;
 	bool cr_sent = false;
+	unsigned int i;
 
 	while (s != end) {
-		wait_for_lsr(up, UART_LSR_THRE);
+		/* Allow timeout for each byte of a possibly full FIFO */
+		fifo_wait_for_lsr(up, fifosize);
 
 		for (i = 0; i < fifosize && s != end; ++i) {
 			if (*s == '\n' && !cr_sent) {
@@ -3492,7 +3583,14 @@ static void serial8250_console_fifo_write(struct uart_8250_port *up,
 				cr_sent = false;
 			}
 		}
+		tx_count = i;
 	}
+
+	/*
+	 * Allow timeout for each byte written since the caller will only wait
+	 * for UART_LSR_BOTH_EMPTY using the timeout of a single character
+	 */
+	fifo_wait_for_lsr(up, tx_count);
 }
 
 /*

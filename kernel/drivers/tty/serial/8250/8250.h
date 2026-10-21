@@ -185,7 +185,9 @@ static inline bool serial8250_set_THRI(struct uart_8250_port *up)
 		return false;
 	up->ier |= UART_IER_THRI;
 #if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
-	up->ier |= UART_IER_PTIME;
+	/* Disable PTIME when it is rs485 mode*/
+	if (!up->em485)
+		up->ier |= UART_IER_PTIME;
 #endif
 	serial_out(up, UART_IER, up->ier);
 	return true;
@@ -197,7 +199,8 @@ static inline bool serial8250_clear_THRI(struct uart_8250_port *up)
 		return false;
 	up->ier &= ~UART_IER_THRI;
 #if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
-	up->ier &= ~UART_IER_PTIME;
+	if (!up->em485)
+		up->ier &= ~UART_IER_PTIME;
 #endif
 	serial_out(up, UART_IER, up->ier);
 	return true;
@@ -353,6 +356,7 @@ static inline int is_omap1510_8250(struct uart_8250_port *pt)
 
 #ifdef CONFIG_SERIAL_8250_DMA
 extern int serial8250_tx_dma(struct uart_8250_port *);
+extern void serial8250_tx_dma_flush(struct uart_8250_port *);
 extern int serial8250_rx_dma(struct uart_8250_port *);
 #if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
 extern int serial8250_start_rx_dma(struct uart_8250_port *);
@@ -388,6 +392,7 @@ static inline int serial8250_tx_dma(struct uart_8250_port *p)
 {
 	return -1;
 }
+static inline void serial8250_tx_dma_flush(struct uart_8250_port *p) { }
 static inline int serial8250_rx_dma(struct uart_8250_port *p)
 {
 	return -1;

@@ -25,6 +25,9 @@
 	/delete-node/ chosen;
 
 	aliases {
+		/* gmac0 is unused here; gmac1 is the only ethernet */
+		/delete-property/ ethernet1;
+		ethernet0 = &gmac1;
 		mmc0 = &sdhci;
 		mmc1 = &sdmmc;
 		mmc2 = &sdio0;
@@ -126,7 +129,6 @@
 
 	gpio_leds: gpio-leds {
 		compatible = "gpio-leds";
-		pinctrl-names = "default";
 
 		sys-led {
 			gpios = <&gpio4 RK_PA1 GPIO_ACTIVE_LOW>;
@@ -135,22 +137,22 @@
 
 		wan-led {
 			gpios = <&gpio4 RK_PA0 GPIO_ACTIVE_HIGH>;
-			linux,default-trigger = "netdev";
+			linux,default-trigger = "dsa-1.0:00:link";
 		};
 
 		lan1-led {
 			gpios = <&gpio1 RK_PB0 GPIO_ACTIVE_HIGH>;
-			linux,default-trigger = "netdev";
+			linux,default-trigger = "dsa-1.0:01:link";
 		};
 
 		lan2-led {
 			gpios = <&gpio1 RK_PB1 GPIO_ACTIVE_HIGH>;
-			linux,default-trigger = "netdev";
+			linux,default-trigger = "dsa-1.0:02:link";
 		};
 
 		lan3-led {
 			gpios = <&gpio1 RK_PB4 GPIO_ACTIVE_HIGH>;
-			linux,default-trigger = "netdev";
+			linux,default-trigger = "dsa-1.0:03:link";
 		};
 	};
 
@@ -380,29 +382,33 @@
 
 			port@0 {
 				reg = <0>;
-				label = "lan3";
-				local-mac-address = [00 48 54 20 00 03];
+				label = "wan";
+				nvmem-cells = <&mac_wan>;
+				nvmem-cell-names = "mac-address";
 				phy-handle = <&phy0>;
 			};
 
 			port@1 {
 				reg = <1>;
-				label = "lan2";
-				local-mac-address = [00 48 54 20 00 02];
+				label = "lan1";
+				nvmem-cells = <&mac_lan1>;
+				nvmem-cell-names = "mac-address";
 				phy-handle = <&phy1>;
 			};
 
 			port@2 {
 				reg = <2>;
-				label = "lan1";
-				local-mac-address = [00 48 54 20 00 01];
+				label = "lan2";
+				nvmem-cells = <&mac_lan2>;
+				nvmem-cell-names = "mac-address";
 				phy-handle = <&phy2>;
 			};
 
 			port@3 {
 				reg = <3>;
-				label = "wan";
-				local-mac-address = [00 48 54 20 00 00];
+				label = "lan3";
+				nvmem-cells = <&mac_lan3>;
+				nvmem-cell-names = "mac-address";
 				phy-handle = <&phy3>;
 			};
 
@@ -663,6 +669,30 @@
 		compatible = "atmel,24c16";
 		reg = <0x50>;
 		pagesize = <16>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		/*
+		 * Radxa "RADX" EEPROM layout, record type 5 (serial number +
+		 * MAC addresses). Four sequential unicast addresses, handed
+		 * out in RTL8367RB port order: port 0 (wan), then ports 1..3
+		 * (lan1..lan3).
+		 */
+		mac_wan: mac-address@9e {
+			reg = <0x9e 0x06>;
+		};
+
+		mac_lan1: mac-address@a4 {
+			reg = <0xa4 0x06>;
+		};
+
+		mac_lan2: mac-address@aa {
+			reg = <0xaa 0x06>;
+		};
+
+		mac_lan3: mac-address@b0 {
+			reg = <0xb0 0x06>;
+		};
 	};
 };
 

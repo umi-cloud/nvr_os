@@ -125,7 +125,7 @@
 	};
 
 	fragment@6 {
-		target = <&hdptxphy_hdmi0>;
+		target = <&hdptxphy0>;
 		__overlay__ {
 			status = "disabled";
 		};

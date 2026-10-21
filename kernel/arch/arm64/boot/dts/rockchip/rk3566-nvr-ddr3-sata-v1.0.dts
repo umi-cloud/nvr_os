@@ -345,6 +345,18 @@
  * 780 以上;或用 ddrbin_tool 调 324 档 DDR3 时序。每一步都要重新跑压力验证。
  */
 &dmc {
+	/*
+	 * 2026-09-10 第三次实测,仍然失败,已改回 disabled:
+	 *   固件升到 DDR blob v1.23 + BL31 v1.45 + BL32 v2.15 后开 dmc
+	 *   → 6.1s Oops(PID 1 死在 next_uptodate_page/filemap_map_pages,
+	 *     即页缓存被写坏)→ panic: Attempted to kill init
+	 *   崩溃时 rockchip-dmc 报 cur_freq 324000000 Hz, volt 900000 uV,
+	 *   与前两次完全同一特征。
+	 * 结论:这不是启动固件的问题。新固件确实在 loader 阶段建好了调频表
+	 * (串口可见 dfs fsp_param 1056/324/528/780 与 dmc_fsp already
+	 * initialized in loader),但 324MHz 档在 vdd_logic 900mV 下本板的
+	 * DDR3 就是没有裕量。下一步应从上面那三条里走,优先删掉 324/528 档。
+	 */
 	status = "disabled";
 	center-supply = <&vdd_logic>;
 };
@@ -363,11 +375,10 @@
 };
 
 /*
- * RTC 用 RK809 内置的那颗(rk808-rtc → rtc0,内核 hctosys/systohc 直接对它读写)。
- * i2c1 @0x51 的 HYM8563 保留节点但禁用:两颗 RTC 同时注册时,RK809 作为 MFD 子设备
- * 先注册抢走 rtc0,aliases 里写 rtc0 = &hym8563 无效(内核报 /aliases ID 0 not available),
- * 开机恢复时间的反而是没被当主 RTC 的那颗,徒增歧义。要改回 HYM8563 只需把
- * status 置 okay 并关掉内核 CONFIG_RTC_DRV_RK808。
+ * RTC 用外挂的 HYM8563(i2c1 @0x51,CR1220 纽扣电池备电),是 rtc0,内核 hctosys/systohc 对它读写。
+ * RK809 内置 RTC 没有备电:2026-10-20 实测断电一夜后读回出厂值 2017-08-04,短时断电能撑住只是靠电容。
+ * 两颗同时注册时 RK809 作为 MFD 子设备先抢走 rtc0(aliases 写 rtc0 = &hym8563 无效,
+ * 内核报 /aliases ID 0 not available),所以 nvr.config 关掉了 CONFIG_RTC_DRV_RK808。
  */
 &i2c1 {
 	status = "okay";
@@ -381,7 +392,7 @@
 		pinctrl-0 = <&rtcic_int>;
 		#clock-cells = <0>;
 		clock-output-names = "hym8563";
-		status = "disabled";
+		status = "okay";
 	};
 };
 

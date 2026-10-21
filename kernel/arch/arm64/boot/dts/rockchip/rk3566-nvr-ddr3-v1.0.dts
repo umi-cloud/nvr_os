@@ -27,7 +27,11 @@
 
 	/* 显式指定 root(完整 PARTUUID),不依赖 u-boot/dtsi 默认值 */
 	chosen {
-		bootargs = "earlycon=uart8250,mmio32,0xfe660000 console=ttyFIQ0 console=tty1 video=HDMI-A-1:1920x1080@60e root=PARTUUID=614e0000-0000-4b53-8000-1d28000054a9 rootfstype=ext4 rw rootwait";
+		/* net_cls/net_prio 只有 cgroup v1 才有,按 cgroup 分流的脚本依赖它们;
+		 * systemd 默认走 v2 统一层级,这里切回 v1 层级。
+		 * 不带 console=tty1:内核日志与 systemd 启动状态只走串口,HDMI 启动期间只显示 logo
+		 * (fbcon 延迟接管见 nvr.config)。tty1 的登录提示不受影响,getty 自己打开 tty1 */
+		bootargs = "earlycon=uart8250,mmio32,0xfe660000 console=ttyFIQ0 video=HDMI-A-1:1920x1080@60e root=PARTUUID=614e0000-0000-4b53-8000-1d28000054a9 rootfstype=ext4 rw rootwait systemd.unified_cgroup_hierarchy=0";
 	};
 
 };
@@ -74,6 +78,16 @@
 
 &hdmi_sound {
 	simple-audio-card,mclk-fs = <128>;
+};
+
+/*
+ * HDMI 固定输出 RGB。u-boot(读的是这份内核 dtb)在显示器声明支持 YCbCr444 时默认输出 YUV444,
+ * 内核驱动默认却是 RGB,接管 logo 时沿用了 u-boot 的 YUV444,两边对不上:显示器把 YUV 当 RGB 解,
+ * 黑底变紫(Y16/Cb128/Cr128 按 R/G/B 读成 128/16/128)。2026-10-21 换上新树 u-boot 后实测出现。
+ * 这个属性只有 u-boot 读,内核不需要它(默认就是 RGB)
+ */
+&hdmi {
+	force_output_bus_format_RGB;
 };
 
 &usbdrd_dwc3 {
@@ -132,19 +146,11 @@
 };
 
 /*
- * 补 GPU OPP 的 opp-supported-hw:rk356x.dtsi 保留了表级 rockchip,supported-hw,
- * 却把每条 OPP 的 opp-supported-hw 注释掉了。该属性一旦缺失,_opp_is_supported()
- * 读不到属性返回 -EINVAL,全部 OPP 被判不支持 → GPU 无 devfreq、固定频率运行。
- * 取值与 cpu0_opp_table 一致(rk3566 soc version=0,在 0xfb 掩码内)。
- * 注意 800MHz 档已被 rk3566-box.dtsi 删除,此处不能引用,否则会把节点重建出来。
+ * GPU OPP 不补 opp-supported-hw:rkr7.2 的 rk3566.dtsi 已删掉表级 rockchip,supported-hw,
+ * 内核不再设置芯片掩码;OPP 上若还带 opp-supported-hw,_opp_is_supported() 一律判不支持,
+ * GPU 会丢掉全部 OPP、无 devfreq。rkr6.1 时为绕开同一问题曾在此补掩码,2026-10-21 升 rkr7.2 时删除。
+ * 注意 dmc_opp_table 的掩码要留着:上游没动 dmc 表的表级 rockchip,supported-hw
  */
-&gpu_opp_table {
-	opp-200000000 { opp-supported-hw = <0xfb 0xffff>; };
-	opp-300000000 { opp-supported-hw = <0xfb 0xffff>; };
-	opp-400000000 { opp-supported-hw = <0xfb 0xffff>; };
-	opp-600000000 { opp-supported-hw = <0xfb 0xffff>; };
-	opp-700000000 { opp-supported-hw = <0xfb 0xffff>; };
-};
 
 /*
  * NPU IOMMU:rk356x.dtsi 默认 disabled 且无板级开启,librknnrt 2.x 分配

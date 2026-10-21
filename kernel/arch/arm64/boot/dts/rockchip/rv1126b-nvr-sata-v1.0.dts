@@ -1,0 +1,442 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * NVR 板 RV1126B SATA 版(原理图 UMI-NVR-RV1126B-V1.0,2026-01-27):
+ * LPDDR3、eMMC 系统盘、RK801 PMIC、SoC 内置 RTC(CR1220 备电)、
+ * 千兆 RGMII(YT8531C / RTL8211F 二选一,M1 引脚组)、
+ * USB 百兆网口 RTL8152B、SATA 硬盘位走 JMS578 USB3-SATA 桥(RV1126B 无原生 SATA)。
+ *
+ * 本文件不 include EVB dtsi(EVB 带摄像头/MIPI 屏/WiFi,本板都没有),电源树与 PMIC
+ * 节点照官方 rv1126b-evb1-v12 的写法(同为 CPU PWM 调压、NPU 由 RK801 DCDC1 供电)。
+ *
+ * USB 拓扑(原理图第 5/14/15/28/29 页):
+ *   - DRD 控制器:USB2 对 → PL2586 四口 hub 上游;hub 下游 2 路接前面板 USB-A(5V 由
+ *     USB2_HOST_PWREN_H 控制),第 4 路接 RTL8152B。USB3 差分对直连 JMS578,
+ *     所以 dwc3 固定 host 模式,SS 走 xhci、硬盘盒即 SATA 盘
+ *   - EHCI host 口:接 JMS578 的 USB2 对(SS 链路建不起来时的降级路径)
+ *   - 板上无 USB-C/OTG 下载口,烧录走 MaskRom(SARADC0_IN7 的 maskrom 测试点)
+ *
+ * 未配:音频(SoC codec + 耳机/MIC,第 9/23/24 页)、WiFi 模组位(第 21 页,预留未贴)、
+ * SARADC0_IN0 的单按键(SW9204,用途未定)、LED_PWM_WHITE/IR 与 I2C2 sensor(未引出)。
+ * 无 SD 卡槽(SDMMC0 引脚未出线)。
+ *
+ * ⚠ 未上真机:GPIO 极性、RGMII 时延、PMIC 电压均待实板核对,见各节点注释。
+ */
+
+/dts-v1/;
+
+#include "rv1126b.dtsi"
+
+/ {
+	model = "RV1126B NVR SATA V1.0 Board";
+	compatible = "rockchip,rv1126b-nvr-sata-v1.0", "rockchip,rv1126b";
+
+	chosen {
+		/* net_cls/net_prio 只有 cgroup v1 才有,按 cgroup 分流的脚本依赖它们;
+		 * systemd 默认走 v2 统一层级,这里切回 v1 层级 */
+		bootargs = "earlycon=uart8250,mmio32,0x20810000 console=ttyFIQ0 rw root=PARTUUID=614e0000-0000 rootfstype=ext4 rootwait coherent_pool=32K systemd.unified_cgroup_hierarchy=0";
+	};
+
+	/*
+	 * 两颗可控灯(第 8/11/12 页):
+	 * - work-led:LED2300 黄灯 "System_Work_LED",阳极经 4.7K 接 VCC_3V3,阴极接 GPIO5_D7
+	 *   (净标 WORK_PWM_LED),拉低点亮。产测 nvr-factory 按 /sys/class/leds/work-led 驱动它
+	 * - power-led:LED2000 绿灯 "System_Power_LED",GPIO5_D6(净标 SATA_LED)经 510R 接阳极,
+	 *   阴极接 SATA 电源座第 11 脚 SATA_DAS(硬盘自己的活动指示输出);另有一颗蓝灯 LED1
+	 *   反并联在同一对网络上。绿灯需 GPIO 高且 DAS 低才亮:不插硬盘时 DAS 悬空、没有回路,
+	 *   这颗"电源灯"不会亮;DAS 空闲电平随硬盘而异,极性待实测
+	 * GPIO5_D6/D7 由芯片引脚表(IRFPA_FSYNC/IRFPA_MCLK 为 VCCIO5 域最后两脚)推定
+	 */
+	gpio-leds {
+		compatible = "gpio-leds";
+		pinctrl-names = "default";
+		pinctrl-0 = <&led_pins>;
+
+		work-led {
+			label = "work-led";
+			gpios = <&gpio5 RK_PD7 GPIO_ACTIVE_LOW>;
+			linux,default-trigger = "default-on";
+		};
+
+		power-led {
+			label = "power-led";
+			gpios = <&gpio5 RK_PD6 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "default-on";
+		};
+	};
+
+	vcc12v_dcin: vcc12v-dcin {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc12v_dcin";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <12000000>;
+		regulator-max-microvolt = <12000000>;
+	};
+
+	/* ETA8120/TMI3253 降压,实为 5.2V(第 11 页),按 5V 声明 */
+	vcc5v0_sys: vcc5v0-sys {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_sys";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		vin-supply = <&vcc12v_dcin>;
+	};
+
+	/*
+	 * CPU 独立降压 TMI3112H(第 13 页 Option 1),PWM_CPU(GPIO0_C4,pwm0 通道 0)调反馈,
+	 * 原理图标注范围 0.8~1.15V、默认 0.95V;参数照官方 EVB1 V12 同一电路
+	 */
+	vdd_cpu: vdd-cpu {
+		compatible = "pwm-regulator";
+		pwms = <&pwm0_8ch_0 0 25000 1>;
+		regulator-name = "vdd_cpu";
+		regulator-init-microvolt = <950000>;
+		regulator-min-microvolt = <750000>;
+		regulator-max-microvolt = <1100000>;
+		regulator-always-on;
+		regulator-boot-on;
+		pwm-supply = <&vcc5v0_sys>;
+	};
+
+	/* USB2_HOST_PWREN_H(GPIO5_A6)使能 SGM2590 负载开关,给 hub 下游两个 USB-A 供 5V(第 15 页) */
+	vcc5v0_host: vcc5v0-host {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_host";
+		regulator-boot-on;
+		regulator-always-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		enable-active-high;
+		gpio = <&gpio5 RK_PA6 GPIO_ACTIVE_HIGH>;
+		vin-supply = <&vcc5v0_sys>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&vcc5v0_host_en>;
+	};
+};
+
+&cpu0 {
+	cpu-supply = <&vdd_cpu>;
+};
+
+/* 照官方 EVB;eMMC VCCIO_FLASH 接 VCC_1V8(第 4 页 R1317),HS200 可用 */
+&emmc {
+	bus-width = <8>;
+	cap-mmc-highspeed;
+	non-removable;
+	mmc-hs200-1_8v;
+	rockchip,default-sample-phase = <90>;
+	no-sdio;
+	no-sd;
+	status = "okay";
+};
+
+&fiq_debugger {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart0m2_xfer_pins>;
+	status = "okay";
+};
+
+/* 调试口 UART0_TX/RX_DBG 在 GPIO0_B3/B4(uart0 的 m2 组,第 2 页);SoC 默认 m0 组在 GPIO2_A0/A1 */
+&uart0 {
+	pinctrl-0 = <&uart0m2_xfer_pins>;
+};
+
+/*
+ * 千兆 RGMII,PHY 用 M1 引脚组(第 8 页 GMAC_*_M1)。PHY 25MHz 由 SoC 的
+ * CLK_OUT_ETHERNET_M1 输出(第 22 页 Option1 R6614 贴 0R,晶振 Option2 不贴)。
+ * PHY 复位 GEPHY_RST_3V3IO = GPIO5_B4,低有效。
+ */
+&gmac {
+	phy-mode = "rgmii";
+	clock_in_out = "output";
+	assigned-clocks = <&cru CLK_MAC_OUT2IO>;
+	assigned-clock-rates = <25000000>;
+
+	snps,reset-gpio = <&gpio5 RK_PB4 GPIO_ACTIVE_LOW>;
+	snps,reset-active-low;
+	snps,reset-delays-us = <0 20000 100000>;
+
+	pinctrl-names = "default";
+	pinctrl-0 = <&ethm1_miim_pins
+		     &ethm1_tx_bus2_pins
+		     &ethm1_rx_bus2_pins
+		     &ethm1_rgmii_clk_pins
+		     &ethm1_rgmii_bus_pins
+		     &eth_clk_25mm1_out_pins>;
+
+	/*
+	 * ⚠ 时延待本板实测标定:先借官方 rv1126bp EVB 的 RGMII 值。Luckfox Aura 上这组值 RX 贴着
+	 * 窗口下沿、千兆大包丢包 25%,最终取 0x3f/0x22;本板走线不同,不能照搬。
+	 * 标定方法:内核片段开 DWMAC_ROCKCHIP_TOOL,sysfs 下 phy_lb_scan 千兆环回扫描取主窗口中心,
+	 * 不要用工具打印的平均值(通过区分岛时平均值可能落在空白区)
+	 */
+	tx_delay = <0x36>;
+	rx_delay = <0x2c>;
+
+	phy-handle = <&rgmii_phy>;
+	status = "okay";
+};
+
+&mdio {
+	/*
+	 * YT8531C-CA 或 RTL8211F-CG(第 22 页,封装兼容二选一),PHY 地址由 strap 定,默认 3'b001。
+	 * 不写 PHY ID,两颗都走各自驱动或 Generic PHY。
+	 * clocks 必须给:25MHz 由 SoC 输出,没人引用会在启动后期被当闲置时钟关掉,
+	 * 表现为 PHY ID 能读但永远 NO-CARRIER(Luckfox Aura 实测踩过)
+	 */
+	rgmii_phy: ethernet-phy@1 {
+		compatible = "ethernet-phy-ieee802.3-c22";
+		reg = <1>;
+		clocks = <&cru CLK_MAC_OUT2IO>;
+	};
+};
+
+/*
+ * RK801 PMIC(第 12 页,I2C0 地址 0x27,PMIC_INT GPIO0_C0,PWR_CTRL GPIO0_C1):
+ * DCDC1 VDD_NPU / DCDC2 VCC3V3_SYS / DCDC3 VCC_DDR(反馈电阻按 LPDDR3 配 1.21V)/
+ * DCDC4 VDD_LOGIC / LDO1 VCC_LDO1(板上未使用)/ LDO2 VCC_1V8 / SWITCH VCC_3V3。
+ * 节点照官方 EVB1 V12,VCC_DDR 电压由硬件反馈电阻决定,不在此设置
+ */
+&i2c0 {
+	status = "okay";
+
+	rk801: rk801@27 {
+		compatible = "rockchip,rk801";
+		status = "okay";
+		reg = <0x27>;
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PC0 IRQ_TYPE_LEVEL_LOW>;
+		pwrctrl-gpios = <&gpio0 RK_PC1 GPIO_ACTIVE_HIGH>;
+
+		pinctrl-names = "default", "pmic-reset";
+		pinctrl-0 = <&pmic_int>;
+		pinctrl-1 = <&soc_pwrctrl_reset>;
+		rockchip,system-power-controller;
+		wakeup-source;
+
+		vcc1-supply = <&vcc5v0_sys>;
+		vcc2-supply = <&vcc5v0_sys>;
+		vcc3-supply = <&vcc5v0_sys>;
+		vcc4-supply = <&vcc5v0_sys>;
+		vcc5-supply = <&vcc3v3_sys>;
+		vcc6-supply = <&vcc3v3_sys>;
+		vcc7-supply = <&vcc3v3_sys>;
+
+		regulators {
+			vdd_npu: DCDC_REG1 {
+				regulator-name = "vdd_npu";
+				regulator-min-microvolt = <500000>;
+				regulator-max-microvolt = <1500000>;
+				regulator-initial-mode = <0x1>;
+				regulator-boot-on;
+				regulator-always-on;
+				regulator-state-mem {
+					regulator-mode = <0x2>;
+					regulator-off-in-suspend;
+					regulator-suspend-microvolt = <950000>;
+				};
+			};
+
+			vcc3v3_sys: DCDC_REG2 {
+				regulator-name = "vcc3v3_sys";
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-initial-mode = <0x1>;
+				regulator-boot-on;
+				regulator-always-on;
+				regulator-state-mem {
+					regulator-mode = <0x2>;
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <3300000>;
+				};
+			};
+
+			vcc_ddr: DCDC_REG3 {
+				regulator-name = "vcc_ddr";
+				regulator-boot-on;
+				regulator-always-on;
+				regulator-state-mem {
+					regulator-mode = <0x2>;
+					regulator-on-in-suspend;
+				};
+			};
+
+			vdd_logic: DCDC_REG4 {
+				regulator-name = "vdd_logic";
+				regulator-min-microvolt = <500000>;
+				regulator-max-microvolt = <1500000>;
+				regulator-initial-mode = <0x1>;
+				regulator-boot-on;
+				regulator-always-on;
+				regulator-state-mem {
+					regulator-mode = <0x2>;
+					regulator-off-in-suspend;
+					regulator-suspend-microvolt = <900000>;
+				};
+			};
+
+			/* 原理图净标 VCC_LDO1,无负载;保持 PMIC 默认电压,不在此约束 */
+			vcc_ldo1: LDO_REG1 {
+				regulator-name = "vcc_ldo1";
+				regulator-boot-on;
+				regulator-always-on;
+				regulator-state-mem {
+					regulator-off-in-suspend;
+				};
+			};
+
+			vcc_1v8: LDO_REG2 {
+				regulator-name = "vcc_1v8";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-boot-on;
+				regulator-always-on;
+				regulator-state-mem {
+					regulator-off-in-suspend;
+					regulator-suspend-microvolt = <1800000>;
+				};
+			};
+
+			vcc_3v3: SWITCH_REG {
+				regulator-name = "vcc_3v3";
+				regulator-boot-on;
+				regulator-always-on;
+				regulator-state-mem {
+					regulator-off-in-suspend;
+					regulator-suspend-microvolt = <3300000>;
+				};
+			};
+		};
+	};
+};
+
+&pinctrl {
+	leds {
+		led_pins: led-pins {
+			rockchip,pins =
+				<5 RK_PD6 RK_FUNC_GPIO &pcfg_pull_none>,
+				<5 RK_PD7 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	pmic {
+		pmic_int: pmic-int {
+			rockchip,pins = <0 RK_PC0 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+
+		soc_pwrctrl_reset: soc-pwrctrl-reset {
+			rockchip,pins = <0 RK_PC1 RK_FUNC_GPIO &pcfg_output_high>;
+		};
+	};
+
+	usb {
+		vcc5v0_host_en: vcc5v0-host-en {
+			rockchip,pins = <5 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+};
+
+/* CPU 调压 PWM(通道 0 的 pinctrl 在 SoC dtsi 里已指向 pwm0m0_ch0_pins = GPIO0_C4) */
+&pwm0_8ch_0 {
+	status = "okay";
+};
+
+/* SoC 内置 RTC,32.768k 晶振 + CR1220 经 R1124 供 RTC_AVDD(第 2/11 页) */
+&rtc {
+	rockchip,rtc-suspend-bypass;
+	status = "okay";
+};
+
+/*
+ * SARADC0:IN0 单按键(SW9204,按下经 100R 到地)、IN2 板型 ID(10K/10K 分压 0.9V)、
+ * IN7 启动模式(10K 上拉,自动模式)。按键用途未定,暂不挂 adc-keys(避免 100ms 轮询空转)
+ */
+&saradc0 {
+	vref-supply = <&vcc_1v8>;
+	status = "okay";
+};
+
+/* 以下为 SoC 内部的编解码、NPU、RGA 与温控,照官方 EVB 开启 */
+&jpegd {
+	status = "okay";
+};
+
+&mpp_srv {
+	status = "okay";
+};
+
+&rga2_core0 {
+	status = "okay";
+};
+
+&rga2_core0_mmu {
+	status = "okay";
+};
+
+&rknpu {
+	rknpu-supply = <&vdd_npu>;
+	status = "okay";
+};
+
+&rknpu_mmu {
+	status = "okay";
+};
+
+&rkvdec {
+	status = "okay";
+};
+
+&rkvdec_mmu {
+	status = "okay";
+};
+
+&rkvenc {
+	status = "okay";
+};
+
+&rkvenc_mmu {
+	status = "okay";
+};
+
+/* 过温保护 hw-tshut-mode 为 CRU 复位(SoC dtsi 默认);TSADC_SHUT 脚经 R1108 0R 接 NPOR_DET(硬复位),
+ * 要走引脚复位需改为 GPIO 模式并配 pinctrl,暂不用 */
+&tsadc {
+	status = "okay";
+};
+
+&usb2phy {
+	status = "okay";
+};
+
+/* EHCI host 口接 JMS578 的 USB2 对;phy-supply 实际给的是 hub 下游 USB-A 的 5V,照 EVB 写法挂在这里 */
+&usb2phy_host {
+	phy-supply = <&vcc5v0_host>;
+	status = "okay";
+};
+
+&usb2phy_otg {
+	status = "okay";
+};
+
+&usb3phy {
+	status = "okay";
+};
+
+&usb_host_ehci {
+	status = "okay";
+};
+
+&usb_host_ohci {
+	status = "okay";
+};
+
+/*
+ * DRD 控制器固定 host:USB2 对接 PL2586 hub 上游(hub 下游:2 个 USB-A + RTL8152B),
+ * USB3 差分对接 JMS578(SATA 盘)。板上无 ID 脚、无 VBUS 检测(VBUSDET 固定分压),不做 OTG
+ */
+&usb_drd_dwc3 {
+	dr_mode = "host";
+	status = "okay";
+};

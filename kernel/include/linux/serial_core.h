@@ -580,6 +580,9 @@ struct uart_port {
 	struct serial_rs485     rs485;
 	struct serial_rs485	rs485_supported;	/* Supported mask for serial_rs485 */
 	struct gpio_desc	*rs485_term_gpio;	/* enable RS485 bus termination */
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	struct gpio_desc	*rs485_de_gpio;		/* enable RS485 de */
+#endif
 	struct serial_iso7816   iso7816;
 	void			*private_data;		/* generic platform data pointer */
 };
@@ -847,7 +850,7 @@ void uart_console_write(struct uart_port *port, const char *s,
 int uart_register_driver(struct uart_driver *uart);
 void uart_unregister_driver(struct uart_driver *uart);
 int uart_add_one_port(struct uart_driver *reg, struct uart_port *port);
-int uart_remove_one_port(struct uart_driver *reg, struct uart_port *port);
+void uart_remove_one_port(struct uart_driver *reg, struct uart_port *port);
 bool uart_match_port(const struct uart_port *port1,
 		const struct uart_port *port2);
 
