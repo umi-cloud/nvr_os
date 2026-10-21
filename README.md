@@ -11,7 +11,7 @@ RK3566 NVR 板的 Linux SDK:kernel 6.1 + Debian 12 bookworm headless。
 `/data/backup/nvr-os-subrepos-20260909/` 的 git bundle 里(debian、device/rockchip、
 docs、u-boot、tools、buildroot、rkbin 七份,外加 kernel 的完整 `.git` 目录)。
 
-`.repo/` 已不可用:Rockchip Gerrit 需要账号,本机没有,`repo sync` 拉不回任何东西。
+`.repo/` 已不可用(Rockchip Gerrit 需要账号,`repo sync` 拉不回任何东西),2026-10-21 已删除。
 把 SDK 收进单仓正是为了不再依赖它。
 
 ## 最小可构建集

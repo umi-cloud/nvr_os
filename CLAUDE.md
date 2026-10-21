@@ -1,6 +1,6 @@
 # nvr-os — RK3566 / RV1126B Linux SDK
 
-主线是 RK3566;RV1126B 于 2026-09-16 接入,自研 SATA 版型 `rv1126b-nvr-sata-v1.0` 于 2026-10-21
+主线是 RK3566。**RV1126B 工作已于 2026-10-21 停止**,文件保留备查:RV1126B 于 2026-09-16 接入,自研 SATA 版型 `rv1126b-nvr-sata-v1.0` 于 2026-10-21
 按原理图建档,**真机未验**(此前验证软件栈用的 Luckfox Aura 开发板板型已同日删除,
 实测结论保留在 git 历史与新板 dts 注释里)。单内核单 rootfs:
 - `kernel/`:6.1.172(armbian 官方镜像 `rk-6.1-rkr7.2`,无需账号)。2026-10-21 由 `rk-6.1-rkr6.1`(6.1.118)升级,
@@ -287,18 +287,20 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 
 ## git 仓库结构(重要)
 
-- 本目录是 repo 工具管理的多仓库结构(`.repo/` + 各子仓库自带 `.git`)
-- **外层 `git add .` 不会收编子仓库内容**(只记 gitlink),勿直接全量提交
-- 所有定制改动已提交在各子仓库的 `nvr-custom` 分支(u-boot、buildroot、debian、device/rockchip、docs、tools 等);新改动继续提交到对应子仓库的 `nvr-custom`
-- `kernel/` 不归 repo 工具管(与 5.10 时代不同),是独立 git 克隆(remote 为 armbian/linux-rockchip,可拉取更新),定制同样在 `nvr-custom` 分支
-- 与官方基线对比:浅克隆 armbian `rk-6.1-rkr7.2`,按 `git ls-files` 逐文件比对(做法见 docs/nvr-customizations.md 上游更新状态一节)
-- 不入库:`buildroot/output/`(50G 构建产物)、`buildroot/dl/`、`rockdev/`、`.repo/`
-- 子仓库远程指向 Rockchip Gerrit,不可推送
+- **单仓**:2026-09-09 由 Rockchip repo 多仓库结构收敛而来,各子目录的 `.git` 已拆除,内容直接入本仓;
+  远端 `git@github.com:umi-cloud/nvr_os.git`,在 `main` 上开发。原子仓的独立历史备份在
+  `/data/backup/nvr-os-subrepos-20260909/`(git bundle);`.repo/` 已于 2026-10-21 删除(拉不到任何东西)
+- 不入库(`.gitignore`):`buildroot/output/`、`buildroot/dl/`、`rockdev/`、`prebuilts/gcc/`、
+  `debian/overlay-firmware/`、`debian/*.tar.gz`、`external/` 下的大件等,清单见 README「最小可构建集」;
+  内核与 u-boot 的构建产物由各自 `.gitignore` 排除
 - **改了 SDK 里的文件,同步更新 [`docs/nvr-customizations.md`](docs/nvr-customizations.md)**:
-  单仓收敛后仓库内部没有原厂基线可 diff,那份清单是唯一能分辨"哪些是我们改的"的地方
-- **repo sync 已不可用**:5.10 内核及 libmali/rkwifibt/rkaiq/chromium/xserver 的
-  `.repo` 对象库随下线一并删除,而本机无 Gerrit 账号,manifest 里这些项目再也拉不回来。
-  需要它们时从 `/data/backup/nvr-os-legacy-20260908/` 的 bundle 还原,或从 Rockchip 官方重新获取
+  单仓里没有原厂基线可 diff,那份清单是唯一能分辨"哪些是我们改的"的地方
+- 与官方基线对比:内核浅克隆 armbian `rk-6.1-rkr7.2` 按 `git ls-files` 逐文件比对;rkbin 对照
+  rockchip-linux/rkbin 的 GitHub 镜像(做法见 docs/nvr-customizations.md 上游更新状态一节)
+- 5.10 内核及 libmali/rkwifibt/rkaiq/chromium/xserver 等老组件已随 2026-09-08 下线删除,需要时从
+  `/data/backup/nvr-os-legacy-20260908/` 的 bundle 还原,或从 Rockchip 官方重新获取
+- 换下来的旧内核树、烧写前的板子备份:`/data/backup/nvr-os-kernel-rkr61-20261021/`、
+  `/data/backup/nvr-os-sata-board-flash-backup-20261021/`
 
 ## 分区(NVR 两块板共用 parameter-nvr.txt)
 
