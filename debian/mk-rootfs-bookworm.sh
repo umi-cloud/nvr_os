@@ -306,7 +306,7 @@ ${APT_INSTALL} systemd-sysv systemd-timesyncd udev dbus kmod sudo locales \
 	iptables \
 	docker.io \
 	iputils-ping curl wget openssh-server \
-	parted dosfstools e2fsprogs \
+	parted dosfstools e2fsprogs xz-utils \
 	smartmontools \
 	htop usbutils vim-tiny less \
 	libdrm2 \
