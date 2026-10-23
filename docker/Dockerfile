@@ -19,8 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && locale-gen en_US.UTF-8
 
-# bookworm rootfs 构建需要新版 debootstrap 和 bookworm 签名密钥(focal 自带的都太旧)
-RUN curl -fsSL -o /tmp/debootstrap.deb http://deb.debian.org/debian/pool/main/d/debootstrap/debootstrap_1.0.144_all.deb \
+# bookworm rootfs 构建需要新版 debootstrap 和 bookworm 签名密钥(focal 自带的都太旧)。
+# pool 里只留最新小版本,旧版本会被删(2026-10-22 1.0.144 已下架),重建失败时到
+# http://deb.debian.org/debian/pool/main/d/debootstrap/ 查当前版本号改这里
+RUN curl -fsSL -o /tmp/debootstrap.deb http://deb.debian.org/debian/pool/main/d/debootstrap/debootstrap_1.0.145_all.deb \
     && curl -fsSL -o /tmp/keyring.deb http://deb.debian.org/debian/pool/main/d/debian-archive-keyring/debian-archive-keyring_2023.3+deb12u2_all.deb \
     && dpkg -i /tmp/debootstrap.deb /tmp/keyring.deb \
     && rm /tmp/debootstrap.deb /tmp/keyring.deb
