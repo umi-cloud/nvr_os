@@ -1650,6 +1650,7 @@ function build_updateimg(){
 		ln -fs $source_package_file_name package-file
 	else
 		echo "Make update.img"
+		check_updateimg_inputs || return 1
 
 		if [ -f "$RK_PACKAGE_FILE" ]; then
 			source_package_file_name=`ls -lh package-file | awk -F ' ' '{print $NF}'`
@@ -1660,9 +1661,41 @@ function build_updateimg(){
 			./mkupdate.sh
 		fi
 		mv update.img $IMAGE_PATH
+		archive_updateimg
 	fi
 
 	finish_build
+}
+
+# kernel/、u-boot/、debian/ 的产物路径与芯片无关,切板后没全量重编就打包会混出别的板的固件
+# (2026-10 实测:RK3566 分区表 + RV1126B 内核)。打包前核对 boot.img 的 dtb 与 rootfs 的模块
+function check_updateimg_inputs(){
+	local boot=$TOP_DIR/rockdev/boot.img rootfs=$TOP_DIR/rockdev/rootfs.img
+	local kdir=$TOP_DIR/${RK_KERNEL_DIR:-kernel} kver
+
+	# FIT 里的 fdt 未压缩,compatible 首项即 rockchip,<dts 名>
+	if ! grep -aqF "rockchip,$RK_KERNEL_DTS" "$boot"; then
+		echo "ERROR: boot.img 不是 $RK_KERNEL_DTS 的内核,先重编: ./docker/run.sh ./build.sh kernel" >&2
+		return 1
+	fi
+	# 模块随内核构建装进 debian/overlay,rootfs 构建时才拷入;内核换过而 rootfs 没重建,模块就对不上
+	kver=$(cat $kdir/include/config/kernel.release 2>/dev/null)
+	if [ -f "$kdir/modules.builtin" ] && ! debugfs -R "cat /lib/modules/$kver/modules.builtin" "$rootfs" 2>/dev/null |
+		cmp -s - "$kdir/modules.builtin"; then
+		echo "ERROR: rootfs 里的内核模块与当前内核不一致,先重建: ./docker/run.sh ./build.sh debian" >&2
+		return 1
+	fi
+}
+
+# 按板型归档一份带时间戳的整包:rockdev/update.img 会被下一次打包(或别的板)覆盖
+function archive_updateimg(){
+	local board dir
+	board=$(basename "$(readlink -f $TOP_DIR/device/rockchip/.BoardConfig.mk)" .mk)
+	board=${board#BoardConfig-}
+	dir=$TOP_DIR/rockdev/$board
+	mkdir -p $dir
+	cp -p $IMAGE_PATH/update.img $dir/update-$board-$(date +%Y%m%d-%H%M).img
+	echo "已归档: rockdev/$board/update-$board-$(date +%Y%m%d-%H%M).img"
 }
 
 function build_otapackage(){

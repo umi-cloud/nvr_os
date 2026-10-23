@@ -328,6 +328,11 @@ mkfs.ext4,按 PARTLABEL 挂到 `/userdata`、`/vcache`。(原自写的 format-da
 
 `rockdev/` 下产物用 RKDevTool(Windows,`RKDevTool_Release_v3.19/`)或 `rkflash.sh` / upgrade_tool 烧写。
 整机包:`./build.sh updateimg`(宿主机跑)→ `rockdev/update.img`,RKDevTool 升级固件页或 upgrade_tool uf 一键烧。
+⚠ `kernel/boot.img`、`u-boot/uboot.img`、`debian/linaro-rootfs.img`、`rockdev/update.img` **两颗芯片共用同一路径**,
+切板后谁最后编就是谁的产物(2026-10 曾混出 RK3566 分区表 + RV1126B 内核的整包)。`updateimg` 打包前会核对
+boot.img 的 dtb 属于当前板型、rootfs 的模块与当前内核一致,不符即报错;打完自动归档到
+`rockdev/<板型>/update-<板型>-<日期时间>.img`,刷机用归档件,别用会被覆盖的 `rockdev/update.img`。
+MaskRom 下先 `upgrade_tool db <loader>` 再 `uf`,直接 `uf` 常报通信失败。
 
 ⚠ **SDK 里有两个 upgrade_tool,别用错**:
 - `rkbin/tools/upgrade_tool` 是 **v1.54(2018 年)**,连当前 build.sh 产出的 update.img 都
