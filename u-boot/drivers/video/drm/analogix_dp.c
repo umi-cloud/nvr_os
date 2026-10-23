@@ -14,6 +14,7 @@
 #include <dm/of_access.h>
 #include <dm/read.h>
 #include <linux/bitfield.h>
+#include <linux/iopoll.h>
 #include <linux/list.h>
 #include <linux/media-bus-format.h>
 #include <syscon.h>
@@ -24,6 +25,8 @@
 #include "rockchip_crtc.h"
 #include "rockchip_connector.h"
 #include "analogix_dp.h"
+
+#define to_dp(nm)	container_of(nm, struct analogix_dp_device, nm)
 
 #define RK3588_GRF_VO1_CON0	0x0000
 #define EDP_MODE		BIT(0)
@@ -634,36 +637,66 @@ static int analogix_dp_init_link_rate_table(struct analogix_dp_device *dp)
 static int analogix_dp_get_max_rx_bandwidth(struct analogix_dp_device *dp,
 					    u8 *bandwidth)
 {
+	u32 max_link_rate;
 	u8 data;
 	int ret;
 
-	ret = drm_dp_dpcd_readb(&dp->aux, DP_EDP_DPCD_REV, &data);
-	if (ret == 1 && data >= DP_EDP_14) {
-		u32 max_link_rate;
+	/*
+	 * For DP rev.1.1, Maximum link rate of Main Link lanes
+	 * 0x06 = 1.62 Gbps, 0x0a = 2.7 Gbps
+	 * For DP rev.1.2, Maximum link rate of Main Link lanes
+	 * 0x06 = 1.62 Gbps, 0x0a = 2.7 Gbps, 0x14 = 5.4Gbps
+	 */
+	ret = drm_dp_dpcd_readb(&dp->aux, DP_MAX_LINK_RATE, &data);
+	if (ret < 0)
+		return ret;
 
-		/* As the Table 4-23 in eDP 1.4 spec, the link rate table is required */
-		if (!dp->nr_link_rate_table) {
-			dev_info(dp->dev, "eDP version: 0x%02x supports link rate table\n",
-					data);
+	*bandwidth = data;
 
-			if (analogix_dp_init_link_rate_table(dp))
-				dev_err(dp->dev, "failed to read link rate table: %d\n",
-					ret);
+	/*
+	 * As the Table 4-24 in eDP 1.4 spec, the Sink device can only support
+	 * Main-Link rate selection via SUPPORTED_LINK_RATES when the value of
+	 * DPCD MAX_LINK_RATE is 00h. If MAX_LINK_RATE and SUPPORTED_LINK_RATES
+	 * are both non-zero, the Sink device can support both methods.
+	 *
+	 * In practice, if MAX_LINK_RATE is not 00h and SUPPORTED_LINK_RATES
+	 * contains non-zero values, sometimes the sink device can only support
+	 * to set link rate via LINK_BW_SET. In such case, there will be errors
+	 * if set the link rate read from SUPPORTED_LINK_RATES to LINK_RATE_SET.
+	 *
+	 * The panel vendor may explain this is to ensure the same Sink firmware
+	 * remains compatible across different versions of the eDP spec. Or the
+	 * Main-Link rate selection method has not been fully verified.
+	 *
+	 * In order to avoid these unexpected cases, MAX_LINK_RATE/LINK_BW_SET
+	 * method will be selected first if MAX_LINK_RATE is non-zero for eDP
+	 * panels that support 1.4 or higher.
+	 */
+	if (*bandwidth == 0) {
+		ret = drm_dp_dpcd_readb(&dp->aux, DP_EDP_DPCD_REV, &data);
+		if (ret == 1 && data >= DP_EDP_14) {
+			/*
+			 * As the Table 4-23 in eDP 1.4 spec, the link rate table is required
+			 * for eDP 1.4 Sink devices.
+			 */
+			if (!dp->nr_link_rate_table) {
+				dev_info(dp->dev, "eDP version: 0x%02x supports link rate table\n",
+					 data);
+
+				ret = analogix_dp_init_link_rate_table(dp);
+				if (ret) {
+					dev_err(dp->dev, "failed to read link rate table: %d\n",
+						ret);
+					return ret;
+				}
+			}
+			max_link_rate = dp->link_rate_table[dp->nr_link_rate_table - 1];
+			*bandwidth = drm_dp_link_rate_to_bw_code(max_link_rate);
+		} else {
+			dev_err(dp->dev, "eDP version: 0x%02x MAX_LINK_RATE should be non-zero\n",
+				data);
+			return -EINVAL;
 		}
-		max_link_rate = dp->link_rate_table[dp->nr_link_rate_table - 1];
-		*bandwidth = drm_dp_link_rate_to_bw_code(max_link_rate);
-	} else {
-		/*
-		 * For DP rev.1.1, Maximum link rate of Main Link lanes
-		 * 0x06 = 1.62 Gbps, 0x0a = 2.7 Gbps
-		 * For DP rev.1.2, Maximum link rate of Main Link lanes
-		 * 0x06 = 1.62 Gbps, 0x0a = 2.7 Gbps, 0x14 = 5.4Gbps
-		*/
-		ret = drm_dp_dpcd_readb(&dp->aux, DP_MAX_LINK_RATE, &data);
-		if (ret < 0)
-			return ret;
-
-		*bandwidth = data;
 	}
 
 	return 0;
@@ -913,21 +946,9 @@ static int analogix_dp_connector_init(struct rockchip_connector *conn, struct di
 	generic_phy_power_on(&dp->phy);
 	analogix_dp_init_dp(dp);
 
+	conn->aux = &dp->aux;
+
 	return 0;
-}
-
-static int analogix_dp_connector_get_edid(struct rockchip_connector *conn,
-					  struct display_state *state)
-{
-	struct connector_state *conn_state = &state->conn_state;
-	struct analogix_dp_device *dp = dev_get_priv(conn->dev);
-	int ret = 0;
-
-	conn_state->edid = drm_do_get_edid(&dp->aux.ddc);
-	if (!conn_state->edid)
-		ret = -EINVAL;
-
-	return ret;
 }
 
 static int analogix_dp_link_power_up(struct analogix_dp_device *dp)
@@ -1304,7 +1325,6 @@ err:
 
 static const struct rockchip_connector_funcs analogix_dp_connector_funcs = {
 	.init = analogix_dp_connector_init,
-	.get_edid = analogix_dp_connector_get_edid,
 	.enable = analogix_dp_connector_enable,
 	.disable = analogix_dp_connector_disable,
 	.detect = analogix_dp_connector_detect,
@@ -1383,11 +1403,26 @@ static int analogix_dp_parse_dt(struct analogix_dp_device *dp)
 	return 0;
 }
 
+static int analogix_dpaux_wait_hpd_asserted(struct drm_dp_aux *aux, unsigned long wait_us)
+{
+	struct analogix_dp_device *dp = to_dp(aux);
+	int val;
+	int ret;
+
+	if (dp->force_hpd)
+		return 0;
+
+	ret = readx_poll_timeout(analogix_dp_get_plug_in_status, dp, val, !val, wait_us);
+
+	return ret;
+}
+
 static int analogix_dp_ddc_init(struct analogix_dp_device *dp)
 {
 	dp->aux.name = "analogix-dp";
 	dp->aux.dev = dp->dev;
 	dp->aux.transfer = analogix_dp_aux_transfer;
+	dp->aux.wait_hpd_asserted = analogix_dpaux_wait_hpd_asserted;
 	dp->aux.ddc.ddc_xfer = drm_dp_i2c_xfer;
 
 	return 0;

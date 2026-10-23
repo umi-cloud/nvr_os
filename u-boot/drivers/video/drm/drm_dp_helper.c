@@ -21,8 +21,22 @@
  * OF THIS SOFTWARE.
  */
 
+#include <backlight.h>
 #include <common.h>
+#include <dm/device.h>
+#include <dm/device-internal.h>
+#include <dm/lists.h>
 #include <drm/drm_dp_helper.h>
+
+#include "rockchip_display.h"
+#include "rockchip_panel.h"
+
+struct dp_aux_backlight {
+	struct drm_dp_aux *aux;
+	struct drm_edp_backlight_info info;
+	u16 default_level;
+	bool enabled;
+};
 
 /**
  * DOC: dp helpers
@@ -148,6 +162,28 @@ int drm_dp_bw_code_to_link_rate(u8 link_bw)
 
 #define AUX_RETRY_INTERVAL 500 /* us */
 
+static void drm_dp_dump_access(const struct drm_dp_aux *aux,
+			       u8 request, unsigned int offset,
+			       void *buffer, int ret)
+{
+	const char *arrow = (request == DP_AUX_NATIVE_READ) ? "->" : "<-";
+
+	if (ret > 0) {
+		char hex[64];
+		int i;
+		int len = min_t(int, ret, 20);
+
+		for (i = 0; i < len; i++)
+			sprintf(hex + i * 3, "%02x ", ((u8 *)buffer)[i]);
+		hex[len * 3] = '\0';
+		debug("%s: 0x%05x AUX %s (ret=%3d) %s\n",
+		      aux->name, offset, arrow, ret, hex);
+	} else {
+		debug("%s: 0x%05x AUX %s (ret=%3d)\n",
+		      aux->name, offset, arrow, ret);
+	}
+}
+
 static int drm_dp_dpcd_access(struct drm_dp_aux *aux, u8 request,
 			      unsigned int offset, void *buffer, size_t size)
 {
@@ -215,6 +251,7 @@ ssize_t drm_dp_dpcd_read(struct drm_dp_aux *aux, unsigned int offset,
 				 buffer, size);
 
 out:
+	drm_dp_dump_access(aux, DP_AUX_NATIVE_READ, offset, buffer, ret);
 	return ret;
 }
 
@@ -226,6 +263,7 @@ ssize_t drm_dp_dpcd_write(struct drm_dp_aux *aux, unsigned int offset,
 	ret = drm_dp_dpcd_access(aux, DP_AUX_NATIVE_WRITE, offset,
 				 buffer, size);
 
+	drm_dp_dump_access(aux, DP_AUX_NATIVE_WRITE, offset, buffer, ret);
 	return ret;
 }
 
@@ -234,6 +272,16 @@ int drm_dp_dpcd_read_link_status(struct drm_dp_aux *aux,
 {
 	return drm_dp_dpcd_read(aux, DP_LANE0_1_STATUS, status,
 				DP_LINK_STATUS_SIZE);
+}
+
+static u8 drm_dp_downstream_port_count(const u8 dpcd[DP_RECEIVER_CAP_SIZE])
+{
+	u8 port_count = dpcd[DP_DOWN_STREAM_PORT_COUNT] & DP_PORT_COUNT_MASK;
+
+	if (dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DETAILED_CAP_INFO_AVAILABLE && port_count > 4)
+		port_count = 4;
+
+	return port_count;
 }
 
 static int drm_dp_read_extended_dpcd_caps(struct drm_dp_aux *aux,
@@ -296,6 +344,230 @@ int drm_dp_read_dpcd_caps(struct drm_dp_aux *aux,
 	       aux->name, DP_RECEIVER_CAP_SIZE, dpcd);
 
 	return ret;
+}
+
+int drm_dp_read_downstream_info(struct drm_dp_aux *aux,
+				const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+				u8 downstream_ports[DP_MAX_DOWNSTREAM_PORTS])
+{
+	int ret;
+	u8 len;
+
+	memset(downstream_ports, 0, DP_MAX_DOWNSTREAM_PORTS);
+
+	/* No downstream info to read */
+	if (!drm_dp_is_branch(dpcd) ||
+	    dpcd[DP_DPCD_REV] < DP_DPCD_REV_10 ||
+	    !(dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DWN_STRM_PORT_PRESENT))
+		return 0;
+
+	/* Some branches advertise having 0 downstream ports, despite also advertising they have a
+	 * downstream port present. The DP spec isn't clear on if this is allowed or not, but since
+	 * some branches do it we need to handle it regardless.
+	 */
+	len = drm_dp_downstream_port_count(dpcd);
+	if (!len)
+		return 0;
+
+	if (dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DETAILED_CAP_INFO_AVAILABLE)
+		len *= 4;
+
+	ret = drm_dp_dpcd_read(aux, DP_DOWNSTREAM_PORT_0, downstream_ports, len);
+	if (ret < 0)
+		return ret;
+	if (ret != len)
+		return -EIO;
+
+	printf("%s: DPCD DFP: %*ph\n",
+		      aux->name, len, downstream_ports);
+
+	return 0;
+}
+int drm_dp_downstream_max_dotclock(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+				   const u8 port_cap[4])
+{
+	if (!drm_dp_is_branch(dpcd))
+		return 0;
+
+	if (dpcd[DP_DPCD_REV] < 0x11)
+		return 0;
+
+	switch (port_cap[0] & DP_DS_PORT_TYPE_MASK) {
+	case DP_DS_PORT_TYPE_VGA:
+		if ((dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DETAILED_CAP_INFO_AVAILABLE) == 0)
+			return 0;
+		return port_cap[1] * 8000;
+	default:
+		return 0;
+	}
+}
+
+int drm_dp_downstream_max_tmds_clock(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+				     const u8 port_cap[4])
+{
+	if (!drm_dp_is_branch(dpcd))
+		return 0;
+
+	if (dpcd[DP_DPCD_REV] < 0x11) {
+		switch (dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DWN_STRM_PORT_TYPE_MASK) {
+		case DP_DWN_STRM_PORT_TYPE_TMDS:
+			return 165000;
+		default:
+			return 0;
+		}
+	}
+
+	switch (port_cap[0] & DP_DS_PORT_TYPE_MASK) {
+	case DP_DS_PORT_TYPE_DP_DUALMODE:
+			return 0;
+		/*
+		 * It's left up to the driver to check the
+		 * DP dual mode adapter's max TMDS clock.
+		 *
+		 * Unfortunatley it looks like branch devices
+		 * may not fordward that the DP dual mode i2c
+		 * access so we just usually get i2c nak :(
+		 */
+	case DP_DS_PORT_TYPE_HDMI:
+		 /*
+		  * We should perhaps assume 165 MHz when detailed cap
+		  * info is not available. But looks like many typical
+		  * branch devices fall into that category and so we'd
+		  * probably end up with users complaining that they can't
+		  * get high resolution modes with their favorite dongle.
+		  *
+		  * So let's limit to 300 MHz instead since DPCD 1.4
+		  * HDMI 2.0 DFPs are required to have the detailed cap
+		  * info. So it's more likely we're dealing with a HDMI 1.4
+		  * compatible* device here.
+		  */
+		if ((dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DETAILED_CAP_INFO_AVAILABLE) == 0)
+			return 300000;
+		return port_cap[1] * 2500;
+	case DP_DS_PORT_TYPE_DVI:
+		if ((dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DETAILED_CAP_INFO_AVAILABLE) == 0)
+			return 165000;
+		/* FIXME what to do about DVI dual link? */
+		return port_cap[1] * 2500;
+	default:
+		return 0;
+	}
+}
+
+int drm_dp_downstream_min_tmds_clock(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+				     const u8 port_cap[4])
+{
+	if (!drm_dp_is_branch(dpcd))
+		return 0;
+
+	if (dpcd[DP_DPCD_REV] < 0x11) {
+		switch (dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DWN_STRM_PORT_TYPE_MASK) {
+		case DP_DWN_STRM_PORT_TYPE_TMDS:
+			return 25000;
+		default:
+			return 0;
+		}
+	}
+
+	switch (port_cap[0] & DP_DS_PORT_TYPE_MASK) {
+	case DP_DS_PORT_TYPE_DP_DUALMODE:
+			return 0;
+	case DP_DS_PORT_TYPE_DVI:
+	case DP_DS_PORT_TYPE_HDMI:
+		/*
+		 * Unclear whether the protocol converter could
+		 * utilize pixel replication. Assume it won't.
+		 */
+		return 25000;
+	default:
+		return 0;
+	}
+}
+
+int drm_dp_downstream_max_bpc(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+			      const u8 port_cap[4])
+{
+	if (!drm_dp_is_branch(dpcd))
+		return 0;
+
+	if (dpcd[DP_DPCD_REV] < 0x11) {
+		switch (dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DWN_STRM_PORT_TYPE_MASK) {
+		case DP_DWN_STRM_PORT_TYPE_DP:
+			return 0;
+		default:
+			return 8;
+		}
+	}
+
+	switch (port_cap[0] & DP_DS_PORT_TYPE_MASK) {
+	case DP_DS_PORT_TYPE_DP:
+		return 0;
+	case DP_DS_PORT_TYPE_DP_DUALMODE:
+			return 0;
+	case DP_DS_PORT_TYPE_HDMI:
+	case DP_DS_PORT_TYPE_DVI:
+	case DP_DS_PORT_TYPE_VGA:
+		if ((dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DETAILED_CAP_INFO_AVAILABLE) == 0)
+			return 8;
+
+		switch (port_cap[2] & DP_DS_MAX_BPC_MASK) {
+		case DP_DS_8BPC:
+			return 8;
+		case DP_DS_10BPC:
+			return 10;
+		case DP_DS_12BPC:
+			return 12;
+		case DP_DS_16BPC:
+			return 16;
+		default:
+			return 8;
+		}
+		break;
+	default:
+		return 8;
+	}
+}
+
+bool drm_dp_downstream_420_passthrough(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+				       const u8 port_cap[4])
+{
+	if (!drm_dp_is_branch(dpcd))
+		return false;
+
+	if (dpcd[DP_DPCD_REV] < 0x13)
+		return false;
+
+	switch (port_cap[0] & DP_DS_PORT_TYPE_MASK) {
+	case DP_DS_PORT_TYPE_DP:
+		return true;
+	case DP_DS_PORT_TYPE_HDMI:
+		if ((dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DETAILED_CAP_INFO_AVAILABLE) == 0)
+			return false;
+
+		return port_cap[3] & DP_DS_HDMI_YCBCR420_PASS_THROUGH;
+	default:
+		return false;
+	}
+}
+
+bool drm_dp_downstream_444_to_420_conversion(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+					     const u8 port_cap[4])
+{
+	if (!drm_dp_is_branch(dpcd))
+		return false;
+
+	if (dpcd[DP_DPCD_REV] < 0x13)
+		return false;
+
+	switch (port_cap[0] & DP_DS_PORT_TYPE_MASK) {
+	case DP_DS_PORT_TYPE_HDMI:
+		if ((dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DETAILED_CAP_INFO_AVAILABLE) == 0)
+			return false;
+
+		return port_cap[3] & DP_DS_HDMI_YCBCR444_TO_420_CONV;
+	default:
+		return false;
+	}
 }
 
 static void drm_dp_i2c_msg_write_status_update(struct drm_dp_aux_msg *msg)
@@ -526,3 +798,417 @@ int drm_dp_i2c_xfer(struct ddc_adapter *adapter, struct i2c_msg *msgs,
 	return err;
 }
 
+int drm_dp_read_desc(struct drm_dp_aux *aux, struct drm_dp_desc *desc,
+		     bool is_branch)
+{
+	struct drm_dp_dpcd_ident *ident = &desc->ident;
+	unsigned int offset = is_branch ? DP_BRANCH_OUI : DP_SINK_OUI;
+	int ret, dev_id_len;
+
+	ret = drm_dp_dpcd_read(aux, offset, ident, sizeof(*ident));
+	if (ret < 0)
+		return ret;
+
+
+	dev_id_len = strnlen((const char *)ident->device_id, sizeof(ident->device_id));
+
+	printk("%s: DP %s: OUI %*phD dev-ID %*pE HW-rev %d.%d SW-rev %d.%d quirks 0x%04x\n",
+		      aux->name, is_branch ? "branch" : "sink",
+		      (int)sizeof(ident->oui), ident->oui,
+		      dev_id_len, ident->device_id,
+		      ident->hw_rev >> 4, ident->hw_rev & 0xf,
+		      ident->sw_major_rev, ident->sw_minor_rev,
+		      desc->quirks);
+
+	return 0;
+}
+
+int drm_edp_backlight_set_level(struct drm_dp_aux *aux, const struct drm_edp_backlight_info *bl,
+				u16 level)
+{
+	int ret;
+	u8 buf[2] = { 0 };
+
+	/* The panel uses the PWM for controlling brightness levels */
+	if (!bl->aux_set)
+		return 0;
+
+	if (bl->lsb_reg_used) {
+		buf[0] = (level & 0xff00) >> 8;
+		buf[1] = (level & 0x00ff);
+	} else {
+		buf[0] = level;
+	}
+
+	ret = drm_dp_dpcd_write(aux, DP_EDP_BACKLIGHT_BRIGHTNESS_MSB, buf, sizeof(buf));
+	if (ret != sizeof(buf)) {
+		pr_err("%s: Failed to write aux backlight level: %d\n", aux->name, ret);
+		return ret < 0 ? ret : -EIO;
+	}
+
+	return 0;
+}
+
+static int
+drm_edp_backlight_set_enable(struct drm_dp_aux *aux, const struct drm_edp_backlight_info *bl,
+			     bool enable)
+{
+	int ret;
+	u8 buf;
+
+	/* This panel uses the EDP_BL_PWR GPIO for enablement */
+	if (!bl->aux_enable)
+		return 0;
+
+	ret = drm_dp_dpcd_readb(aux, DP_EDP_DISPLAY_CONTROL_REGISTER, &buf);
+	if (ret != 1) {
+		pr_err("%s: Failed to read eDP display control register: %d\n", aux->name, ret);
+		return ret < 0 ? ret : -EIO;
+	}
+	if (enable)
+		buf |= DP_EDP_BACKLIGHT_ENABLE;
+	else
+		buf &= ~DP_EDP_BACKLIGHT_ENABLE;
+
+	ret = drm_dp_dpcd_writeb(aux, DP_EDP_DISPLAY_CONTROL_REGISTER, buf);
+	if (ret != 1) {
+		pr_err("%s: Failed to write eDP display control register: %d\n", aux->name, ret);
+		return ret < 0 ? ret : -EIO;
+	}
+
+	return 0;
+}
+
+int drm_edp_backlight_enable(struct drm_dp_aux *aux, const struct drm_edp_backlight_info *bl,
+			     const u16 level)
+{
+	int ret;
+	u8 dpcd_buf;
+
+	if (bl->aux_set)
+		dpcd_buf = DP_EDP_BACKLIGHT_CONTROL_MODE_DPCD;
+	else
+		dpcd_buf = DP_EDP_BACKLIGHT_CONTROL_MODE_PWM;
+
+	if (bl->pwmgen_bit_count) {
+		ret = drm_dp_dpcd_writeb(aux, DP_EDP_PWMGEN_BIT_COUNT, bl->pwmgen_bit_count);
+		if (ret != 1)
+			pr_debug("%s: Failed to write aux pwmgen bit count: %d\n", aux->name, ret);
+	}
+
+	if (bl->pwm_freq_pre_divider) {
+		ret = drm_dp_dpcd_writeb(aux, DP_EDP_BACKLIGHT_FREQ_SET, bl->pwm_freq_pre_divider);
+		if (ret != 1)
+			pr_debug("%s: Failed to write aux backlight frequency: %d\n",
+				 aux->name, ret);
+		else
+			dpcd_buf |= DP_EDP_BACKLIGHT_FREQ_AUX_SET_ENABLE;
+	}
+
+	ret = drm_dp_dpcd_writeb(aux, DP_EDP_BACKLIGHT_MODE_SET_REGISTER, dpcd_buf);
+	if (ret != 1) {
+		pr_debug("%s: Failed to write aux backlight mode: %d\n", aux->name, ret);
+		return ret < 0 ? ret : -EIO;
+	}
+
+	ret = drm_edp_backlight_set_level(aux, bl, level);
+	if (ret < 0)
+		return ret;
+	ret = drm_edp_backlight_set_enable(aux, bl, true);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
+int drm_edp_backlight_disable(struct drm_dp_aux *aux, const struct drm_edp_backlight_info *bl)
+{
+	int ret;
+
+	ret = drm_edp_backlight_set_enable(aux, bl, false);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
+static inline int
+drm_edp_backlight_probe_max(struct drm_dp_aux *aux, struct drm_edp_backlight_info *bl,
+			    u16 driver_pwm_freq_hz, const u8 edp_dpcd[EDP_DISPLAY_CTL_CAP_SIZE])
+{
+	int fxp, fxp_min, fxp_max, fxp_actual, f = 1;
+	int ret;
+	u8 pn, pn_min, pn_max;
+
+	if (!bl->aux_set)
+		return 0;
+
+	ret = drm_dp_dpcd_readb(aux, DP_EDP_PWMGEN_BIT_COUNT, &pn);
+	if (ret != 1) {
+		pr_debug("%s: Failed to read pwmgen bit count cap: %d\n", aux->name, ret);
+		return -ENODEV;
+	}
+
+	pn &= DP_EDP_PWMGEN_BIT_COUNT_MASK;
+	bl->max = (1 << pn) - 1;
+	if (!driver_pwm_freq_hz)
+		return 0;
+
+	/*
+	 * Set PWM Frequency divider to match desired frequency provided by the driver.
+	 * The PWM Frequency is calculated as 27Mhz / (F x P).
+	 * - Where F = PWM Frequency Pre-Divider value programmed by field 7:0 of the
+	 *             EDP_BACKLIGHT_FREQ_SET register (DPCD Address 00728h)
+	 * - Where P = 2^Pn, where Pn is the value programmed by field 4:0 of the
+	 *             EDP_PWMGEN_BIT_COUNT register (DPCD Address 00724h)
+	 */
+
+	/* Find desired value of (F x P)
+	 * Note that, if F x P is out of supported range, the maximum value or minimum value will
+	 * applied automatically. So no need to check that.
+	 */
+	fxp = DIV_ROUND_CLOSEST(1000 * DP_EDP_BACKLIGHT_FREQ_BASE_KHZ, driver_pwm_freq_hz);
+
+	/* Use highest possible value of Pn for more granularity of brightness adjustment while
+	 * satisfying the conditions below.
+	 * - Pn is in the range of Pn_min and Pn_max
+	 * - F is in the range of 1 and 255
+	 * - FxP is within 25% of desired value.
+	 *   Note: 25% is arbitrary value and may need some tweak.
+	 */
+	ret = drm_dp_dpcd_readb(aux, DP_EDP_PWMGEN_BIT_COUNT_CAP_MIN, &pn_min);
+	if (ret != 1) {
+		pr_debug("%s: Failed to read pwmgen bit count cap min: %d\n", aux->name, ret);
+		return 0;
+	}
+	ret = drm_dp_dpcd_readb(aux, DP_EDP_PWMGEN_BIT_COUNT_CAP_MAX, &pn_max);
+	if (ret != 1) {
+		pr_debug("%s: Failed to read pwmgen bit count cap max: %d\n", aux->name, ret);
+		return 0;
+	}
+	pn_min &= DP_EDP_PWMGEN_BIT_COUNT_MASK;
+	pn_max &= DP_EDP_PWMGEN_BIT_COUNT_MASK;
+
+	/* Ensure frequency is within 25% of desired value */
+	fxp_min = DIV_ROUND_CLOSEST(fxp * 3, 4);
+	fxp_max = DIV_ROUND_CLOSEST(fxp * 5, 4);
+	if (fxp_min < (1 << pn_min) || (255 << pn_max) < fxp_max) {
+		pr_debug("%s: Driver defined backlight frequency (%d) out of range\n",
+			 aux->name, driver_pwm_freq_hz);
+		return 0;
+	}
+
+	for (pn = pn_max; pn >= pn_min; pn--) {
+		f = clamp(DIV_ROUND_CLOSEST(fxp, 1 << pn), 1, 255);
+		fxp_actual = f << pn;
+		if (fxp_min <= fxp_actual && fxp_actual <= fxp_max)
+			break;
+	}
+
+	ret = drm_dp_dpcd_writeb(aux, DP_EDP_PWMGEN_BIT_COUNT, pn);
+	if (ret != 1) {
+		pr_debug("%s: Failed to write aux pwmgen bit count: %d\n", aux->name, ret);
+		return 0;
+	}
+	bl->pwmgen_bit_count = pn;
+	bl->max = (1 << pn) - 1;
+
+	if (edp_dpcd[2] & DP_EDP_BACKLIGHT_FREQ_AUX_SET_CAP) {
+		bl->pwm_freq_pre_divider = f;
+		pr_debug("%s: Using backlight frequency from driver (%dHz)\n",
+			 aux->name, driver_pwm_freq_hz);
+	}
+
+	return 0;
+}
+
+static inline int
+drm_edp_backlight_probe_state(struct drm_dp_aux *aux, struct drm_edp_backlight_info *bl,
+			      u8 *current_mode)
+{
+	int ret;
+	u8 buf[2];
+	u8 mode_reg;
+
+	ret = drm_dp_dpcd_readb(aux, DP_EDP_BACKLIGHT_MODE_SET_REGISTER, &mode_reg);
+	if (ret != 1) {
+		pr_debug("%s: Failed to read backlight mode: %d\n", aux->name, ret);
+		return ret < 0 ? ret : -EIO;
+	}
+
+	*current_mode = (mode_reg & DP_EDP_BACKLIGHT_CONTROL_MODE_MASK);
+	if (!bl->aux_set)
+		return 0;
+
+	if (*current_mode == DP_EDP_BACKLIGHT_CONTROL_MODE_DPCD) {
+		int size = 1 + bl->lsb_reg_used;
+
+		ret = drm_dp_dpcd_read(aux, DP_EDP_BACKLIGHT_BRIGHTNESS_MSB, buf, size);
+		if (ret != size) {
+			pr_debug("%s: Failed to read backlight level: %d\n", aux->name, ret);
+			return ret < 0 ? ret : -EIO;
+		}
+
+		if (bl->lsb_reg_used)
+			return (buf[0] << 8) | buf[1];
+		else
+			return buf[0];
+	}
+
+	/*
+	 * If we're not in DPCD control mode yet, the programmed brightness value is meaningless and
+	 * the driver should assume max brightness
+	 */
+	return bl->max;
+}
+
+int
+drm_edp_backlight_init(struct drm_dp_aux *aux, struct drm_edp_backlight_info *bl,
+		       u16 driver_pwm_freq_hz, const u8 edp_dpcd[EDP_DISPLAY_CTL_CAP_SIZE],
+		       u16 *current_level, u8 *current_mode)
+{
+	int ret;
+
+	if (edp_dpcd[1] & DP_EDP_BACKLIGHT_AUX_ENABLE_CAP)
+		bl->aux_enable = true;
+	if (edp_dpcd[2] & DP_EDP_BACKLIGHT_BRIGHTNESS_AUX_SET_CAP)
+		bl->aux_set = true;
+	if (edp_dpcd[2] & DP_EDP_BACKLIGHT_BRIGHTNESS_BYTE_COUNT)
+		bl->lsb_reg_used = true;
+
+	/* Sanity check caps */
+	if (!bl->aux_set && !(edp_dpcd[2] & DP_EDP_BACKLIGHT_BRIGHTNESS_PWM_PIN_CAP)) {
+		pr_debug("%s: Panel supports neither AUX or PWM brightness control? Aborting\n",
+			 aux->name);
+		return -EINVAL;
+	}
+
+	ret = drm_edp_backlight_probe_max(aux, bl, driver_pwm_freq_hz, edp_dpcd);
+	if (ret < 0)
+		return ret;
+
+	ret = drm_edp_backlight_probe_state(aux, bl, current_mode);
+	if (ret < 0)
+		return ret;
+	*current_level = ret;
+
+	pr_debug("%s: Found backlight: aux_set=%d aux_enable=%d mode=%d\n",
+		 aux->name, bl->aux_set, bl->aux_enable, *current_mode);
+	if (bl->aux_set) {
+		pr_debug("%s: Backlight caps: level=%d/%d pwm_freq_pre_divider=%d lsb_reg_used=%d\n",
+			 aux->name, *current_level, bl->max, bl->pwm_freq_pre_divider,
+			 bl->lsb_reg_used);
+	}
+
+	return 0;
+}
+
+static int dp_aux_backlight_enable(struct udevice *dev)
+{
+	struct drm_dp_aux *aux = (struct drm_dp_aux *)dev_get_driver_data(dev);
+	struct dp_aux_backlight *bl = dev_get_priv(dev);
+	u8 edp_dpcd[EDP_DISPLAY_CTL_CAP_SIZE];
+	u8 current_mode;
+	int ret;
+
+	if (!bl->enabled) {
+		ret = drm_dp_dpcd_read(aux, DP_EDP_DPCD_REV, edp_dpcd,
+				       EDP_DISPLAY_CTL_CAP_SIZE);
+		if (ret < 0)
+			return ret;
+
+		ret = drm_edp_backlight_init(aux, &bl->info, 0, edp_dpcd,
+					     &bl->default_level, &current_mode);
+		if (ret < 0)
+			return ret;
+
+		ret = drm_edp_backlight_enable(bl->aux, &bl->info, bl->default_level);
+		if (ret < 0)
+			return ret;
+
+		bl->enabled = true;
+	}
+
+	return 0;
+}
+
+static int dp_aux_backlight_disable(struct udevice *dev)
+{
+	struct dp_aux_backlight *bl = dev_get_priv(dev);
+	int ret;
+
+	if (bl->enabled) {
+		ret = drm_edp_backlight_disable(bl->aux, &bl->info);
+		if (ret < 0) {
+			pr_err("%s: Failed to disable AUX backlight\n", bl->aux->name);
+			return ret;
+		}
+
+		bl->enabled = false;
+	}
+
+	return 0;
+}
+
+static const struct backlight_ops dp_aux_bl_ops = {
+	.enable = dp_aux_backlight_enable,
+	.disable = dp_aux_backlight_disable,
+};
+
+static int dp_aux_bl_probe(struct udevice *dev)
+{
+	struct drm_dp_aux *aux = (struct drm_dp_aux *)dev_get_driver_data(dev);
+	struct dp_aux_backlight *bl = dev_get_priv(dev);
+
+	bl->aux = aux;
+
+	return 0;
+}
+
+U_BOOT_DRIVER(dp_aux_backlight) = {
+	.name = "dp_aux_backlight",
+	.id = UCLASS_PANEL_BACKLIGHT,
+	.ops = &dp_aux_bl_ops,
+	.probe = dp_aux_bl_probe,
+	.priv_auto_alloc_size = sizeof(struct dp_aux_backlight),
+};
+
+int drm_panel_dp_aux_backlight(struct rockchip_panel *panel, struct drm_dp_aux *aux)
+{
+	struct driver *drv;
+	u8 edp_dpcd[EDP_DISPLAY_CTL_CAP_SIZE];
+	int ret;
+
+	if (!panel || !panel->dev || !aux)
+		return -EINVAL;
+
+	ret = drm_dp_dpcd_read(aux, DP_EDP_DPCD_REV, edp_dpcd,
+			       EDP_DISPLAY_CTL_CAP_SIZE);
+	if (ret < 0)
+		return ret;
+
+	if (!drm_edp_backlight_supported(edp_dpcd)) {
+		dev_info(panel->dev, "DP AUX backlight is not supported\n");
+		return 0;
+	}
+
+	drv = lists_driver_lookup_name("dp_aux_backlight");
+	if (!drv) {
+		dev_err(panel->dev, "Failed to find DP AUX backlight driver\n");
+		return -ENOENT;
+	}
+
+	ret = device_bind_with_driver_data(panel->dev, drv, "dp_aux_backlight", (ulong)aux,
+					   panel->dev->node, &panel->backlight);
+	if (ret)
+		return ret;
+
+	ret = device_probe(panel->backlight);
+	if (ret) {
+		device_unbind(panel->backlight);
+		panel->backlight = NULL;
+		return ret;
+	}
+
+	return 0;
+}

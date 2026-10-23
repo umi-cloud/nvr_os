@@ -522,33 +522,66 @@ static int spinand_check_ecc_status(struct spinand_device *spinand, u8 status)
 	return -EINVAL;
 }
 
+static int spinand_read_page_wait(struct spinand_device *spinand, u8 *s)
+{
+	unsigned long start, stop;
+	u8 status;
+	int ret;
+
+	start = get_timer(0);
+	stop = 400;
+	do {
+		ret = spinand_read_status(spinand, &status);
+		if (ret)
+			return ret;
+
+		if (status & STATUS_BUSY)
+			continue;
+
+		ret = spinand_read_status(spinand, &status);
+		if (ret)
+			return ret;
+
+		if (!(status & STATUS_BUSY))
+			break;
+
+	} while (get_timer(start) < stop);
+
+	*s = status;
+
+	return status & STATUS_BUSY ? -ETIMEDOUT : 0;
+}
+
 static int spinand_read_page(struct spinand_device *spinand,
 			     const struct nand_page_io_req *req,
 			     bool ecc_enabled)
 {
-	u8 status = 0;
+	u8 status;
 	int ret;
 
 	ret = spinand_load_page_op(spinand, req);
 	if (ret)
 		return ret;
 
-	ret = spinand_wait(spinand, &status);
-	/*
-	 * When there is data outside of OIP in the status, the status data is
-	 * inaccurate and needs to be reconfirmed
-	 */
-	if (spinand->id.data[0] == 0x01 && status && !ret)
+	/* Workaround for Skyhigh */
+	if (spinand->id.data[0] == 0x01) {
+		ret = spinand_read_page_wait(spinand, &status);
+		if (ret)
+			return ret;
+	} else {
 		ret = spinand_wait(spinand, &status);
-	if (ret < 0)
-		return ret;
+		if (ret)
+			return ret;
+	}
 
 	ret = spinand_read_from_cache_op(spinand, req);
 	if (ret)
 		return ret;
 
-	if (spinand->support_cont_read && !(spinand->slave->mode & SPI_DMA_PREPARE))
+#ifdef CONFIG_SPI_NAND_CONT_READ
+	if (!(spinand->slave->mode & SPI_DMA_PREPARE))
 		spinand_wait(spinand, &status);
+#endif
 
 	if (!ecc_enabled)
 		return 0;
@@ -591,7 +624,11 @@ static int spinand_mtd_read(struct mtd_info *mtd, loff_t from,
 	bool enable_ecc = false;
 	bool ecc_failed = false;
 	int ret = 0;
-	bool cont_real = spinand->support_cont_read;
+
+	if (spinand->support_cont_read && (from & mtd->writesize_mask)) {
+		printf("spinand cont read at unaligned offset %llx %x\n", from, mtd->writesize_mask);
+		return -EINVAL;
+	}
 
 	if (ops->mode != MTD_OPS_RAW && spinand->eccinfo.ooblayout)
 		enable_ecc = true;
@@ -608,12 +645,6 @@ static int spinand_mtd_read(struct mtd_info *mtd, loff_t from,
 		ret = spinand_ecc_enable(spinand, enable_ecc);
 		if (ret)
 			break;
-
-		/* For misaligned situations, temporarily disable the cont read capability */
-		if (iter.req.dataoffs)
-			spinand->support_cont_read = false;
-		else
-			spinand->support_cont_read = cont_real;
 
 		if (spinand->support_cont_read) {
 			iter.req.datalen = ops->len;
@@ -647,8 +678,6 @@ static int spinand_mtd_read(struct mtd_info *mtd, loff_t from,
 #endif
 	if (ecc_failed && !ret)
 		ret = -EBADMSG;
-
-	spinand->support_cont_read = cont_real;
 
 	return ret ? ret : max_bitflips;
 }
@@ -884,9 +913,11 @@ static const struct spinand_manufacturer *spinand_manufacturers[] = {
 #endif
 #ifdef CONFIG_SPI_NAND_ESMT
 	&esmt_spinand_manufacturer,
+	&esmt_elite_spinand_manufacturer,
 #endif
 #ifdef CONFIG_SPI_NAND_XINCUN
 	&xincun_spinand_manufacturer,
+	&xincun_6c_spinand_manufacturer,
 #endif
 #ifdef CONFIG_SPI_NAND_XTX
 	&xtx_spinand_manufacturer,
@@ -912,6 +943,9 @@ static const struct spinand_manufacturer *spinand_manufacturers[] = {
 #ifdef CONFIG_SPI_NAND_SILICONGO
 	&silicongo_spinand_manufacturer,
 #endif
+#ifdef CONFIG_SPI_NAND_TITAN
+	&titan_spinand_manufacturer,
+#endif
 #ifdef CONFIG_SPI_NAND_UNIM
 	&unim_spinand_manufacturer,
 	&unim_zl_spinand_manufacturer,
@@ -930,6 +964,21 @@ static const struct spinand_manufacturer *spinand_manufacturers[] = {
 #endif
 #ifdef CONFIG_SPI_NAND_KINGSTON
 	&kingston_spinand_manufacturer,
+#endif
+#ifdef CONFIG_SPI_NAND_ISSI
+	&issi_spinand_manufacturer,
+#endif
+#ifdef CONFIG_SPI_NAND_MK
+	&mk_spinand_manufacturer,
+#endif
+#ifdef CONFIG_SPI_NAND_CHUCUN
+	&chucun_spinand_manufacturer,
+#endif
+#ifdef CONFIG_SPI_NAND_ICTHINK
+	&icthink_spinand_manufacturer,
+#endif
+#ifdef CONFIG_SPI_NAND_UNILC
+	&unilc_spinand_manufacturer,
 #endif
 };
 

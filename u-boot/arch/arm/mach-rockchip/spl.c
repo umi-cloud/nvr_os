@@ -31,6 +31,7 @@
 #include <asm/arch/param.h>
 #include <asm/arch/rk_hwid.h>
 #include <asm/arch/rk_meta.h>
+#include <asm/arch/mos.h>
 
 DECLARE_GLOBAL_DATA_PTR;
 
@@ -284,6 +285,9 @@ int board_init_f_boot_flags(void)
 #else
 	asm volatile("mrc p15, 0, %0, c14, c0, 0" : "=r" (gd->arch.timer_rate_hz));
 #endif
+#ifdef CONFIG_MOS_SUPPORT
+	mos_spl_init();
+#endif
 
 #if CONFIG_IS_ENABLED(FPGA_ROCKCHIP)
 	arch_fpga_init();
@@ -508,8 +512,10 @@ __weak void spl_fdt_fixup_memory(struct spl_image_info *spl_image)
 			size[i] = t->u.ddr_mem.bank[i + count];
 #ifdef SPL_RESV_MEM_SIZE
 			if ((start[i] == CONFIG_SYS_SDRAM_BASE) &&
-			    (start[i] + size[i] > CONFIG_SYS_SDRAM_BASE + SPL_RESV_MEM_SIZE))
+			    (start[i] + size[i] > CONFIG_SYS_SDRAM_BASE + SPL_RESV_MEM_SIZE)) {
 				start[i] += SPL_RESV_MEM_SIZE;
+				size[i] -= SPL_RESV_MEM_SIZE;
+			}
 #endif
 			if (size[i] == 0)
 				continue;
@@ -541,6 +547,8 @@ int spl_find_hwid_dtb(const char *fdt_name)
 int spl_fdt_chosen_bootargs(struct spl_load_info *info, void *fdt)
 {
 	__maybe_unused struct blk_desc *desc = info->dev;
+	__maybe_unused char *env = NULL;
+	__maybe_unused int ret = 0;
 
 #ifdef CONFIG_SPL_AB
 	char slot_suffix[3] = {0};
@@ -551,12 +559,13 @@ int spl_fdt_chosen_bootargs(struct spl_load_info *info, void *fdt)
 
 #ifdef CONFIG_SPL_ENVF
 	char *part_type[] = { "mtdparts", "blkdevparts" };
-	char *env = NULL;
 	char *part_list;
-	int id = 0, ret = 0;
+	int id = 0;
 
+#ifdef CONFIG_MTD_BLK
 	env = envf_get(desc, part_type[id]);
 	if (!env)
+#endif
 		env = envf_get(desc, part_type[++id]);
 	if (env) {
 		if (!strstr(env, part_type[id])) {
@@ -577,11 +586,11 @@ int spl_fdt_chosen_bootargs(struct spl_load_info *info, void *fdt)
 		debug("## parts: %s\n\n", part_list);
 
 		env = envf_get(desc, "sys_bootargs");
-		env = env + strlen("sys_bootargs=");
 		if (env) {
+			env = env + strlen("sys_bootargs=");
 			ret = fdt_bootargs_append(fdt, env);
 			if (ret) {
-				printf("Append sys_bootargs to bootargs fail");
+				printf("Append sys_bootargs to bootargs fail, ret=%d\n", ret);
 				return ret;
 			}
 			debug("## sys_bootargs: %s\n\n", env);
@@ -615,6 +624,9 @@ void spl_perform_fixups(struct spl_image_info *spl_image)
   #ifdef BUILD_SPL_TAG
 	atags_set_shared_fwver(FW_SPL, "spl-"BUILD_SPL_TAG);
   #endif
+#endif
+#ifdef CONFIG_MOS_SUPPORT
+	mos_spl_late_init();
 #endif
 #if defined(CONFIG_SPL_KERNEL_BOOT)
 	if (spl_image->next_stage == SPL_NEXT_STAGE_KERNEL)

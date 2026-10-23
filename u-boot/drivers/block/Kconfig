@@ -22,6 +22,15 @@ config SPL_BLK
 	  be partitioned into several areas, called 'partitions' in U-Boot.
 	  A filesystem can be placed in each partition.
 
+config BLK_READ_PREPARE
+	bool "Support block devices prepare to read data"
+	depends on BLK
+	help
+	  Enable support for block devices to prefetch data. MMC and mtd_blk
+	  devices can be attached to block devices. It is applied to prefetch
+	  data in the background and the device run some other process in the
+	  same time.
+
 config SPL_BLK_READ_PREPARE
 	bool "Support block devices prepare to read data in SPL"
 	depends on SPL_BLK
@@ -47,3 +56,20 @@ config IDE
 	  This allows access to raw blocks and filesystems on an IDE drive
 	  from U-Boot. See also CMD_IDE which provides an 'ide' command for
 	  performing various IDE operations.
+
+config RAMDISK
+	bool "Ram disk in U-Boot"
+	help
+	  This enables ramdisk support.
+
+config SPL_RAMDISK
+	bool "Ram disk support in SPL"
+	help
+	  This enables ramdisk support.
+
+config VIRTUAL_DISK
+	bool "Virtual disk"
+	default n
+	help
+	  This enable virtual disk support.
+

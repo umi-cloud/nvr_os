@@ -3,6 +3,7 @@
  *
  * SPDX-License-Identifier:     GPL-2.0+
  */
+#include <amp.h>
 #include <common.h>
 #include <dm.h>
 #include <fdt_support.h>
@@ -839,7 +840,7 @@ void spl_board_sd_iomux_save(void)
 	gpio0a_iomux_sel_h = readl(&pmu1_ioc->gpio0a_iomux_sel_h);
 }
 
-void spl_board_storages_fixup(struct spl_image_loader *loader)
+void spl_board_storages_finish(struct spl_image_loader *loader)
 {
 	int ret = 0;
 
@@ -1431,15 +1432,45 @@ int rk_board_fdt_fixup(const void *blob)
 	return 0;
 }
 
-int fit_standalone_release(char *id, uintptr_t entry_point)
+int fit_standalone_ext_release(char *id, standalone_args_t *args)
 {
 	/* pmu m0 configuration: */
+	uintptr_t load = args->load;
+	uintptr_t sram_start = args->sram_start;
+	uintptr_t exsram_start = args->exsram_start;
+	uintptr_t experi_start = args->experi_start;
+	uintptr_t uc_start = args->uc_start;
+	uintptr_t uc_end = args->uc_end;
+
 	/* set gpll */
 	writel(0x00f00042, CRU_BASE + CRU_GPLL_CON1);
 
 	sip_smc_mcu_config(ROCKCHIP_SIP_CONFIG_PMUMCU_0_ID,
 			   ROCKCHIP_SIP_CONFIG_MCU_CODE_START_ADDR,
-			   0xffff0000 | (entry_point >> 16));
+			   0xffff0000 | (load >> 16));
+	if (sram_start) {
+		sip_smc_mcu_config(ROCKCHIP_SIP_CONFIG_PMUMCU_0_ID,
+				   ROCKCHIP_SIP_CONFIG_MCU_SRAM_START_ADDR,
+				   0xffff0000 | (sram_start >> 16));
+	}
+	if (exsram_start) {
+		sip_smc_mcu_config(ROCKCHIP_SIP_CONFIG_PMUMCU_0_ID,
+				   ROCKCHIP_SIP_CONFIG_MCU_EXSRAM_START_ADDR,
+				   0xffff0000 | (exsram_start >> 16));
+	}
+	if (experi_start) {
+		sip_smc_mcu_config(ROCKCHIP_SIP_CONFIG_PMUMCU_0_ID,
+				   ROCKCHIP_SIP_CONFIG_MCU_EXPERI_START_ADDR,
+				   0xffff0000 | (experi_start >> 16));
+	}
+	if (uc_start && uc_end) {
+		sip_smc_mcu_config(ROCKCHIP_SIP_CONFIG_PMUMCU_0_ID,
+				   ROCKCHIP_SIP_CONFIG_MCU_UNCACHE_START_ADDR,
+				   uc_start);
+		sip_smc_mcu_config(ROCKCHIP_SIP_CONFIG_PMUMCU_0_ID,
+				   ROCKCHIP_SIP_CONFIG_MCU_UNCACHE_END_ADDR,
+				   uc_end);
+	}
 
 	/* select WDT trigger global reset. */
 	writel(0x08400840, CRU_BASE + CRU_GLB_RST_CON);

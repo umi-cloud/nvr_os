@@ -211,7 +211,7 @@ int generic_phy_init(struct phy *phy)
 	else
 		counts->init_count = 1;
 
-	return 0;
+	return ret;
 }
 
 int generic_phy_reset(struct phy *phy)
@@ -252,7 +252,7 @@ int generic_phy_exit(struct phy *phy)
 	else
 		counts->init_count = 0;
 
-	return 0;
+	return ret;
 }
 
 int generic_phy_power_on(struct phy *phy)
@@ -336,6 +336,17 @@ int generic_phy_validate(struct phy *phy, enum phy_mode mode, int submode,
 	return ops->validate ? ops->validate(phy, mode, submode, opts) : 0;
 }
 
+int generic_phy_set_speed(struct phy *phy, int speed)
+{
+	struct phy_ops const *ops;
+
+	if (!generic_phy_valid(phy))
+		return 0;
+	ops = phy_dev_ops(phy->dev);
+
+	return ops->set_speed ? ops->set_speed(phy, speed) : 0;
+}
+
 int generic_phy_set_mode_ext(struct phy *phy, enum phy_mode mode, int submode)
 {
 	struct phy_ops const *ops;
@@ -353,6 +364,17 @@ int generic_phy_set_mode_ext(struct phy *phy, enum phy_mode mode, int submode)
 		phy->attrs.mode = mode;
 
 	return ret;
+}
+
+int generic_phy_calibrate(struct phy *phy)
+{
+	struct phy_ops const *ops;
+
+	if (!generic_phy_valid(phy))
+		return 0;
+	ops = phy_dev_ops(phy->dev);
+
+	return ops->calibrate ? ops->calibrate(phy) : 0;
 }
 
 UCLASS_DRIVER(phy) = {

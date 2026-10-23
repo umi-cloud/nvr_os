@@ -105,6 +105,46 @@ void lmb_init(struct lmb *lmb)
 	lmb->reserved.size = 0;
 }
 
+static void lmb_reserve_common(struct lmb *lmb, void *fdt_blob)
+{
+	arch_lmb_reserve(lmb);
+	board_lmb_reserve(lmb);
+
+	if (IMAGE_ENABLE_OF_LIBFDT && fdt_blob)
+		boot_fdt_add_mem_rsv_regions(lmb, fdt_blob);
+}
+
+/* Initialize the struct, add memory and call arch/board reserve functions */
+void lmb_init_and_reserve(struct lmb *lmb, bd_t *bd, void *fdt_blob)
+{
+#ifdef CONFIG_NR_DRAM_BANKS
+	int i;
+#endif
+
+	lmb_init(lmb);
+#ifdef CONFIG_NR_DRAM_BANKS
+	for (i = 0; i < CONFIG_NR_DRAM_BANKS; i++) {
+		if (bd->bi_dram[i].size) {
+			lmb_add(lmb, bd->bi_dram[i].start,
+				bd->bi_dram[i].size);
+		}
+	}
+#else
+	if (bd->bi_memsize)
+		lmb_add(lmb, bd->bi_memstart, bd->bi_memsize);
+#endif
+	lmb_reserve_common(lmb, fdt_blob);
+}
+
+/* Initialize the struct, add memory and call arch/board reserve functions */
+void lmb_init_and_reserve_range(struct lmb *lmb, phys_addr_t base,
+				phys_size_t size, void *fdt_blob)
+{
+	lmb_init(lmb);
+	lmb_add(lmb, base, size);
+	lmb_reserve_common(lmb, fdt_blob);
+}
+
 /* This routine called with relocation disabled. */
 static long lmb_add_region(struct lmb_region *rgn, phys_addr_t base, phys_size_t size)
 {
@@ -332,6 +372,31 @@ int lmb_is_reserved(struct lmb *lmb, phys_addr_t addr)
 		if ((addr >= lmb->reserved.region[i].base) && (addr <= upper))
 			return 1;
 	}
+	return 0;
+}
+
+/* Return number of bytes from a given address that are free */
+phys_size_t lmb_get_free_size(struct lmb *lmb, phys_addr_t addr)
+{
+	int i;
+
+	/* This area isn't reserved, take it */
+	if (!lmb_is_reserved(lmb, addr)) {
+		for (i = 0; i < lmb->reserved.cnt; i++) {
+			if (addr < lmb->reserved.region[i].base)
+				/* first reserved range > requested address */
+				return lmb->reserved.region[i].base - addr;
+
+			if (lmb->reserved.region[i].base +
+			    lmb->reserved.region[i].size > addr)
+				/* requested addr is in this reserved range */
+				return 0;
+		}
+		/* if we come here: no reserved ranges above requested addr */
+		return lmb->memory.region[lmb->memory.cnt - 1].base +
+		       lmb->memory.region[lmb->memory.cnt - 1].size - addr;
+	}
+
 	return 0;
 }
 

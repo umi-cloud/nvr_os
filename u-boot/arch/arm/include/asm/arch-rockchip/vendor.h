@@ -23,8 +23,11 @@
 #define SENSOR_CALIBRATION_ID		14
 #define IMEI_ID				15
 #define LAN_RGMII_DL_ID			16
-#define EINK_VCOM_ID			17
+#define EBOOK_VCOM_ID			17
 #define FIRMWARE_VER_ID			18
+#define SYSCFG_ID			29
+#define OS0_DTB_ID			30
+#define OS1_DTB_ID			31
 #define MULTI_MODULE_KEY_ID		1068
 
 struct vendor_item {
@@ -37,6 +40,22 @@ struct vendor_item {
 int vendor_storage_test(void);
 int vendor_storage_read(u16 id, void *pbuf, u16 size);
 int vendor_storage_write(u16 id, void *pbuf, u16 size);
+
+/* read vendor storage from a given raw vendor storage buffer */
+int vendor_storage_buffer_read(u16 id, void *pbuf, u16 size,
+			       void *vendor_addr, u32 vendor_size);
+
+#ifdef CONFIG_SPL_BUILD
+#include <spl.h>
+
+/**
+ * flash_vendor_dev_ops_register - Register spl_load_info interface (SPL build only)
+ * @info: pointer to spl_load_info structure containing read interface
+ *
+ * Return: 0 on success, -EPERM if interface is already registered
+ */
+int flash_vendor_dev_ops_register(struct spl_load_info *info);
+#else
 int flash_vendor_dev_ops_register(int (*read)(struct blk_desc *dev_desc,
 					      u32 sec,
 					      u32 n_sec,
@@ -45,6 +64,7 @@ int flash_vendor_dev_ops_register(int (*read)(struct blk_desc *dev_desc,
 					       u32 sec,
 					       u32 n_sec,
 					       void *p_data));
+#endif
 
 int vendor_handle_hdcp(struct vendor_item *vhead);
 

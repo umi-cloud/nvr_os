@@ -9,6 +9,8 @@
 #include <config.h>
 #include <common.h>
 #include <errno.h>
+#include <generic-phy.h>
+#include <phy-mipi-dphy.h>
 #include <dm.h>
 #include <div64.h>
 #include <asm/io.h>
@@ -16,24 +18,11 @@
 #include <linux/iopoll.h>
 #include <linux/math64.h>
 
-#include "rockchip_phy.h"
-
+#define HZ_PER_MHZ	1000000UL
 #define USEC_PER_SEC	1000000LL
 #define PSEC_PER_SEC	1000000000000LL
 
 #define UPDATE(x, h, l)	(((x) << (l)) & GENMASK((h), (l)))
-
-/*
- * The offset address[7:0] is distributed two parts, one from the bit7 to bit5
- * is the first address, the other from the bit4 to bit0 is the second address.
- * when you configure the registers, you must set both of them. The Clock Lane
- * and Data Lane use the same registers with the same second address, but the
- * first address is different.
- */
-#define FIRST_ADDRESS(x)		(((x) & 0x7) << 5)
-#define SECOND_ADDRESS(x)		(((x) & 0x1f) << 0)
-#define PHY_REG(first, second)		(FIRST_ADDRESS(first) | \
-					 SECOND_ADDRESS(second))
 
 /* Analog Register Part: reg00 */
 #define BANDGAP_POWER_MASK			BIT(7)
@@ -46,7 +35,7 @@
 #define LANE_EN_1				BIT(3)
 #define LANE_EN_0				BIT(2)
 #define POWER_WORK_MASK				GENMASK(1, 0)
-#define POWER_WORK_ENABLE			UPDATE(1, 1, 0)
+#define POWER_WORK(x)				UPDATE(x, 1, 0)
 #define POWER_WORK_DISABLE			UPDATE(2, 1, 0)
 /* Analog Register Part: reg01 */
 #define REG_SYNCRST_MASK			BIT(2)
@@ -86,7 +75,7 @@
 #define PRE_EMPHASIS_ENABLE			BIT(7)
 #define PRE_EMPHASIS_DISABLE			0
 #define PLL_POST_DIV_ENABLE_MASK		BIT(5)
-#define PLL_POST_DIV_ENABLE			BIT(5)
+#define PLL_POST_DIV_ENABLE(x)			UPDATE(x, 5, 5)
 #define PLL_POST_DIV_DISABLE			0
 #define DATA_LANE_VOD_RANGE_SET_MASK		GENMASK(3, 0)
 #define DATA_LANE_VOD_RANGE_SET(x)		UPDATE(x, 3, 0)
@@ -103,10 +92,16 @@
 #define VOD_MID_RANGE			0x3
 #define VOD_BIG_RANGE			0x7
 #define VOD_MAX_RANGE			0xf
+/* Analog Register Part: reg1C */
+#define REG_FBDIV_BIT_11_9_MASK			GENMASK(4, 2)
+#define REG_FBDIV_BIT_11_9(x)			UPDATE(x >> 9, 4, 2)
 /* Analog Register Part: reg1e */
 #define PLL_MODE_SEL_MASK			GENMASK(6, 5)
 #define PLL_MODE_SEL_LVDS_MODE			0
 #define PLL_MODE_SEL_MIPI_MODE			BIT(5)
+/* Analog Register Part: reg2A */
+#define REG_POSTDIV_MASK			GENMASK(4, 0)
+#define REG_POSTDIV(x)				UPDATE(x, 4, 0)
 
 /* Digital Register Part: reg00 */
 #define REG_DIG_RSTN_MASK			BIT(0)
@@ -149,6 +144,8 @@
 #define T_WAKEUP_CNT_LO_MASK			GENMASK(7, 0)
 #define T_WAKEUP_CNT_LO(x)			UPDATE(x, 7, 0)
 /* Clock/Data0/Data1/Data2/Data3 Lane Register Part: reg0e */
+#define REG_HSTXCLKDONE_BYP_MASK		BIT(7)
+#define REG_HSTXCLKDONE_BYP			BIT(7)
 #define T_CLK_PRE_CNT_MASK			GENMASK(3, 0)
 #define T_CLK_PRE_CNT(x)			UPDATE(x, 3, 0)
 /* Clock/Data0/Data1/Data2/Data3 Lane Register Part: reg10 */
@@ -207,11 +204,20 @@ enum soc_type {
 	RK3128_VIDEO_PHY,
 	RK3368_VIDEO_PHY,
 	RK3568_VIDEO_PHY,
+	RK3572_VIDEO_PHY,
 };
 
 enum phy_max_rate {
-	MAX_1GHZ,
-	MAX_2_5GHZ,
+	MAX_1GHZ = 1000 * HZ_PER_MHZ,
+	MAX_2_5GHZ = 2500 * HZ_PER_MHZ,
+	MAX_4_5GHZ = 4500 * HZ_PER_MHZ,
+};
+
+struct inno_video_phy_reg {
+	u8 first_addr_shift;
+	u8 first_addr_mask;
+	u8 second_addr_shift;
+	u8 second_addr_mask;
 };
 
 struct inno_video_mipi_dphy_timing {
@@ -220,88 +226,141 @@ struct inno_video_mipi_dphy_timing {
 	u8 hs_prepare;
 	u8 clk_lane_hs_zero;
 	u8 data_lane_hs_zero;
-	u8 hs_trail;
+	u8 clk_lane_hs_trail;
+	u8 data_lane_hs_trail;
+	u8 hs_clk_post;
 };
 
 struct inno_video_mipi_dphy_info {
 	const struct inno_video_mipi_dphy_timing *inno_mipi_dphy_timing_table;
 	const unsigned int num_timings;
+	const struct inno_video_phy_reg *phy_reg;
 	enum phy_max_rate phy_max_rate;
+};
+
+struct inno_video_phy_plat_data {
+	enum soc_type soc_type;
+	const struct inno_video_mipi_dphy_info *info;
 };
 
 static const
 struct inno_video_mipi_dphy_timing inno_mipi_dphy_timing_table_max_1GHz[] = {
-	{ 110, 0x0, 0x20, 0x16, 0x02, 0x22},
-	{ 150, 0x0, 0x06, 0x16, 0x03, 0x45},
-	{ 200, 0x0, 0x18, 0x17, 0x04, 0x0b},
-	{ 250, 0x0, 0x05, 0x17, 0x05, 0x16},
-	{ 300, 0x0, 0x51, 0x18, 0x06, 0x2c},
-	{ 400, 0x0, 0x64, 0x19, 0x07, 0x33},
-	{ 500, 0x0, 0x20, 0x1b, 0x07, 0x4e},
-	{ 600, 0x0, 0x6a, 0x1d, 0x08, 0x3a},
-	{ 700, 0x0, 0x3e, 0x1e, 0x08, 0x6a},
-	{ 800, 0x0, 0x21, 0x1f, 0x09, 0x29},
-	{1000, 0x0, 0x09, 0x20, 0x09, 0x27},
+	{ 110, 0x0, 0x20, 0x16, 0x02, 0x22, 0x22, 0x0},
+	{ 150, 0x0, 0x06, 0x16, 0x03, 0x45, 0x45, 0x0},
+	{ 200, 0x0, 0x18, 0x17, 0x04, 0x0b, 0x0b, 0x0},
+	{ 250, 0x0, 0x05, 0x17, 0x05, 0x16, 0x16, 0x0},
+	{ 300, 0x0, 0x51, 0x18, 0x06, 0x2c, 0x2c, 0x0},
+	{ 400, 0x0, 0x64, 0x19, 0x07, 0x33, 0x33, 0x0},
+	{ 500, 0x0, 0x20, 0x1b, 0x07, 0x4e, 0x4e, 0x0},
+	{ 600, 0x0, 0x6a, 0x1d, 0x08, 0x3a, 0x3a, 0x0},
+	{ 700, 0x0, 0x3e, 0x1e, 0x08, 0x6a, 0x6a, 0x0},
+	{ 800, 0x0, 0x21, 0x1f, 0x09, 0x29, 0x29, 0x0},
+	{1000, 0x0, 0x09, 0x20, 0x09, 0x27, 0x27, 0x0},
 };
 
 static const
 struct inno_video_mipi_dphy_timing inno_mipi_dphy_timing_table_max_2_5GHz[] = {
-	{ 110, 0x02, 0x7f, 0x16, 0x02, 0x02},
-	{ 150, 0x02, 0x7f, 0x16, 0x03, 0x02},
-	{ 200, 0x02, 0x7f, 0x17, 0x04, 0x02},
-	{ 250, 0x02, 0x7f, 0x17, 0x05, 0x04},
-	{ 300, 0x02, 0x7f, 0x18, 0x06, 0x04},
-	{ 400, 0x03, 0x7e, 0x19, 0x07, 0x04},
-	{ 500, 0x03, 0x7c, 0x1b, 0x07, 0x08},
-	{ 600, 0x03, 0x70, 0x1d, 0x08, 0x10},
-	{ 700, 0x05, 0x40, 0x1e, 0x08, 0x30},
-	{ 800, 0x05, 0x02, 0x1f, 0x09, 0x30},
-	{1000, 0x05, 0x08, 0x20, 0x09, 0x30},
-	{1200, 0x06, 0x03, 0x32, 0x14, 0x0f},
-	{1400, 0x09, 0x03, 0x32, 0x14, 0x0f},
-	{1600, 0x0d, 0x42, 0x36, 0x0e, 0x0f},
-	{1800, 0x0e, 0x47, 0x7a, 0x0e, 0x0f},
-	{2000, 0x11, 0x64, 0x7a, 0x0e, 0x0b},
-	{2200, 0x13, 0x64, 0x7e, 0x15, 0x0b},
-	{2400, 0x13, 0x33, 0x7f, 0x15, 0x6a},
-	{2500, 0x15, 0x54, 0x7f, 0x15, 0x6a},
+	{ 110, 0x02, 0x7f, 0x16, 0x02, 0x02, 0x02, 0x0c},
+	{ 150, 0x02, 0x7f, 0x16, 0x03, 0x02, 0x02, 0x0c},
+	{ 200, 0x02, 0x7f, 0x17, 0x04, 0x02, 0x02, 0x0c},
+	{ 250, 0x02, 0x7f, 0x17, 0x05, 0x04, 0x04, 0x0c},
+	{ 300, 0x02, 0x7f, 0x18, 0x06, 0x04, 0x04, 0x0c},
+	{ 400, 0x03, 0x7e, 0x19, 0x07, 0x04, 0x04, 0x08},
+	{ 500, 0x03, 0x7c, 0x1b, 0x07, 0x08, 0x08, 0x08},
+	{ 600, 0x03, 0x70, 0x1d, 0x08, 0x10, 0x10, 0x09},
+	{ 700, 0x05, 0x40, 0x1e, 0x08, 0x30, 0x30, 0x09},
+	{ 800, 0x05, 0x02, 0x1f, 0x09, 0x30, 0x30, 0x0a},
+	{1000, 0x05, 0x08, 0x20, 0x09, 0x30, 0x30, 0x0a},
+	{1200, 0x06, 0x03, 0x32, 0x14, 0x0f, 0x0f, 0x0a},
+	{1400, 0x09, 0x03, 0x32, 0x14, 0x0f, 0x0f, 0x37},
+	{1600, 0x0d, 0x42, 0x36, 0x0e, 0x0f, 0x0f, 0x37},
+	{1800, 0x0e, 0x47, 0x7a, 0x0e, 0x0f, 0x0f, 0x37},
+	{2000, 0x11, 0x64, 0x7a, 0x0e, 0x0b, 0x0b, 0x3e},
+	{2200, 0x13, 0x64, 0x7e, 0x15, 0x0b, 0x0b, 0x3e},
+	{2400, 0x13, 0x33, 0x7f, 0x15, 0x6a, 0x6a, 0x32},
+	{2500, 0x15, 0x54, 0x7f, 0x15, 0x6a, 0x6a, 0x32},
+};
+
+static const
+struct inno_video_mipi_dphy_timing inno_mipi_dphy_timing_table_max_4_5GHz[] = {
+	{ 110, 0x01, 0x7f, 0x01, 0x01, 0x7f, 0x7e, 0x03},
+	{ 150, 0x01, 0x7f, 0x02, 0x01, 0x7f, 0x7e, 0x04},
+	{ 200, 0x01, 0x7f, 0x04, 0x01, 0x7f, 0x7c, 0x05},
+	{ 250, 0x01, 0x7f, 0x06, 0x01, 0x7e, 0x7c, 0x06},
+	{ 300, 0x01, 0x7f, 0x08, 0x01, 0x7e, 0x7c, 0x06},
+	{ 400, 0x02, 0x7f, 0x0c, 0x03, 0x7c, 0x78, 0x09},
+	{ 500, 0x02, 0x7f, 0x0d, 0x05, 0x7c, 0x78, 0x09},
+	{ 600, 0x03, 0x7f, 0x13, 0x07, 0x7c, 0x7c, 0x0b},
+	{ 700, 0x04, 0x7e, 0x16, 0x07, 0x78, 0x78, 0x0b},
+	{ 800, 0x04, 0x7c, 0x16, 0x09, 0x70, 0x70, 0x0b},
+	{ 900, 0x04, 0x7c, 0x16, 0x09, 0x40, 0x40, 0x13},
+	{1000, 0x07, 0x70, 0x20, 0x09, 0x01, 0x01, 0x13},
+	{1200, 0x07, 0x70, 0x2a, 0x12, 0x01, 0x01, 0x13},
+	{1400, 0x09, 0x60, 0x2b, 0x12, 0x02, 0x02, 0x15},
+	{1600, 0x11, 0x40, 0x3b, 0x12, 0x02, 0x02, 0x15},
+	{1800, 0x11, 0x08, 0x3b, 0x14, 0x08, 0x08, 0x15},
+	{2000, 0x11, 0x41, 0x45, 0x16, 0x41, 0x41, 0x18},
+	{2200, 0x11, 0x41, 0x45, 0x19, 0x41, 0x41, 0x18},
+	{2400, 0x11, 0x06, 0x58, 0x1d, 0x0c, 0x0c, 0x1b},
+	{2500, 0x11, 0x06, 0x58, 0x1d, 0x0c, 0x0c, 0x1b},
+	{2600, 0x11, 0x06, 0x58, 0x1d, 0x0c, 0x0c, 0x1b},
+	{2800, 0x16, 0x30, 0x63, 0x21, 0x61, 0x61, 0x1f},
+	{3000, 0x16, 0x61, 0x63, 0x25, 0x05, 0x05, 0x25},
+	{3200, 0x16, 0x05, 0x6d, 0x25, 0x05, 0x05, 0x25},
+	{3400, 0x1b, 0x05, 0x78, 0x28, 0x14, 0x14, 0x2a},
+	{3600, 0x1b, 0x28, 0x78, 0x2a, 0x51, 0x51, 0x2a},
+	{3800, 0x1f, 0x23, 0x7c, 0x2c, 0x1e, 0x1e, 0x2d},
+	{4000, 0x1f, 0x3c, 0x7f, 0x2f, 0x1e, 0x1e, 0x31},
+	{4200, 0x20, 0x48, 0x7f, 0x30, 0x1e, 0x1e, 0x31},
+	{4400, 0x21, 0x0b, 0x7f, 0x35, 0x64, 0x64, 0x36},
+	{4500, 0x21, 0x59, 0x7f, 0x35, 0x64, 0x64, 0x36},
+};
+
+/*
+ * The offset address[10:0] is distributed into two parts:
+ *
+ * 1.Bit [7:5] is the first address
+ * 2.Bit [4:0] is the second address
+ */
+static const struct inno_video_phy_reg inno_video_phy_reg_8bits = {
+	.first_addr_shift = 5,
+	.first_addr_mask = 0x7,
+	.second_addr_shift = 0,
+	.second_addr_mask = 0x1f,
+};
+
+/*
+ * The offset address[10:0] is distributed into two parts:
+ *
+ * 1.Bit [10:7] is the first address
+ * 2.Bit [6:0] is the second address
+ */
+static const struct inno_video_phy_reg inno_video_phy_reg_11bits = {
+	.first_addr_shift = 7,
+	.first_addr_mask = 0xf,
+	.second_addr_shift = 0,
+	.second_addr_mask = 0x7f,
 };
 
 const struct inno_video_mipi_dphy_info inno_video_mipi_dphy_max_1GHz = {
 	.inno_mipi_dphy_timing_table = inno_mipi_dphy_timing_table_max_1GHz,
 	.num_timings = ARRAY_SIZE(inno_mipi_dphy_timing_table_max_1GHz),
+	.phy_reg = &inno_video_phy_reg_8bits,
 	.phy_max_rate = MAX_1GHZ,
 };
 
 const struct inno_video_mipi_dphy_info inno_video_mipi_dphy_max_2_5GHz = {
 	.inno_mipi_dphy_timing_table = inno_mipi_dphy_timing_table_max_2_5GHz,
 	.num_timings = ARRAY_SIZE(inno_mipi_dphy_timing_table_max_2_5GHz),
+	.phy_reg = &inno_video_phy_reg_8bits,
 	.phy_max_rate = MAX_2_5GHZ,
 };
 
-struct mipi_dphy_timing {
-	unsigned int clkmiss;
-	unsigned int clkpost;
-	unsigned int clkpre;
-	unsigned int clkprepare;
-	unsigned int clksettle;
-	unsigned int clktermen;
-	unsigned int clktrail;
-	unsigned int clkzero;
-	unsigned int dtermen;
-	unsigned int eot;
-	unsigned int hsexit;
-	unsigned int hsprepare;
-	unsigned int hszero;
-	unsigned int hssettle;
-	unsigned int hsskip;
-	unsigned int hstrail;
-	unsigned int init;
-	unsigned int lpx;
-	unsigned int taget;
-	unsigned int tago;
-	unsigned int tasure;
-	unsigned int wakeup;
+const struct inno_video_mipi_dphy_info inno_video_mipi_dphy_max_4_5GHz = {
+	.inno_mipi_dphy_timing_table = inno_mipi_dphy_timing_table_max_4_5GHz,
+	.num_timings = ARRAY_SIZE(inno_mipi_dphy_timing_table_max_4_5GHz),
+	.phy_reg = &inno_video_phy_reg_11bits,
+	.phy_max_rate = MAX_4_5GHZ,
 };
 
 struct inno_video_phy {
@@ -310,10 +369,21 @@ struct inno_video_phy {
 	const struct inno_video_mipi_dphy_info *mipi_dphy_info;
 	struct resource phy;
 	struct resource host;
+	struct phy_configure_opts_mipi_dphy dphy_cfg;
 	int lanes;
 	struct {
 		u8 prediv;
 		u16 fbdiv;
+
+		/*
+		 * lowfre_en only for mipi dphy max_rate >= 2.5Gbps.
+		 *
+		 * lowfre_en=1: PLL_Output_Frequency = FREF*FBDIV/(PREDIV*POSTDIV*2)
+		 * lowfre_en=0: PLL_Output_Frequency = FREF*FBDIV/(PREDIV)
+		 */
+		bool lowfre_en;
+		u8 postdiv;
+
 		unsigned long rate;
 	} pll;
 	u32 lvds_vcom;
@@ -331,11 +401,25 @@ enum {
 	REGISTER_PART_LVDS,
 };
 
+/*
+ * The offset address[7:0] or address[10:0] is distributed two parts, one from
+ * the bit7 to bit5 or the bit10 to bit7 is the first address, the other from
+ * the bit4 to bit0 or the bit6 to bit0 is the second address.
+ *
+ * when you configure the registers, you must set both of them. The Clock Lane
+ * and Data Lane use the same registers with the same second address, but the
+ * first address is different.
+ */
 static inline void phy_update_bits(struct inno_video_phy *inno,
 				   u8 first, u8 second, u8 mask, u8 val)
 {
-	u32 reg = PHY_REG(first, second) << 2;
+	const struct inno_video_phy_reg *phy_reg = inno->mipi_dphy_info->phy_reg;
+	u32 reg, reg_first, reg_second;
 	u32 tmp, orig;
+
+	reg_first = (first & phy_reg->first_addr_mask) << phy_reg->first_addr_shift;
+	reg_second = (second & phy_reg->second_addr_mask) << phy_reg->second_addr_shift;
+	reg = (reg_first | reg_second) << 2;
 
 	orig = readl(inno->phy.start + reg);
 	tmp = orig & ~mask;
@@ -352,34 +436,6 @@ static inline void host_update_bits(struct inno_video_phy *inno,
 	tmp = orig & ~mask;
 	tmp |= val & mask;
 	writel(tmp, inno->host.start + reg);
-}
-
-static void mipi_dphy_timing_get_default(struct mipi_dphy_timing *timing,
-					 unsigned long period)
-{
-	/* Global Operation Timing Parameters */
-	timing->clkmiss = 0;
-	timing->clkpost = 70000 + 52 * period;
-	timing->clkpre = 8 * period;
-	timing->clkprepare = 65000;
-	timing->clksettle = 95000;
-	timing->clktermen = 0;
-	timing->clktrail = 80000;
-	timing->clkzero = 260000;
-	timing->dtermen = 0;
-	timing->eot = 0;
-	timing->hsexit = 120000;
-	timing->hsprepare = 65000 + 4 * period;
-	timing->hszero = 145000 + 6 * period;
-	timing->hssettle = 85000 + 6 * period;
-	timing->hsskip = 40000;
-	timing->hstrail = max(8 * period, 60000 + 4 * period);
-	timing->init = 100000000;
-	timing->lpx = 60000;
-	timing->taget = 5 * timing->lpx;
-	timing->tago = 4 * timing->lpx;
-	timing->tasure = 2 * timing->lpx;
-	timing->wakeup = 1000000000;
 }
 
 static const struct inno_video_mipi_dphy_timing *
@@ -403,7 +459,30 @@ inno_mipi_dphy_get_timing(struct inno_video_phy *inno)
 	return &timings[i];
 }
 
-static void inno_mipi_dphy_max_2_5GHz_pll_enable(struct inno_video_phy *inno)
+static void inno_mipi_dphy_max_4_5ghz_pll_enable(struct inno_video_phy *inno)
+{
+	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x03,
+			REG_PREDIV_MASK, REG_PREDIV(inno->pll.prediv));
+	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x1c,
+			REG_FBDIV_BIT_11_9_MASK, REG_FBDIV_BIT_11_9(inno->pll.fbdiv));
+	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x03,
+			REG_FBDIV_HI_MASK, REG_FBDIV_HI(inno->pll.fbdiv >> 8));
+	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x04,
+			REG_FBDIV_LO_MASK, REG_FBDIV_LO(inno->pll.fbdiv));
+	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x08,
+			PLL_POST_DIV_ENABLE_MASK, PLL_POST_DIV_ENABLE(inno->pll.lowfre_en));
+	if (inno->pll.lowfre_en)
+		phy_update_bits(inno, REGISTER_PART_ANALOG, 0x2a,
+				REG_POSTDIV_MASK, REG_POSTDIV(inno->pll.postdiv));
+	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x0b,
+			CLOCK_LANE_VOD_RANGE_SET_MASK,
+			CLOCK_LANE_VOD_RANGE_SET(VOD_MAX_RANGE));
+	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x01,
+			 REG_LDOPD_MASK | REG_PLLPD_MASK,
+			 REG_LDOPD_POWER_ON | REG_PLLPD_POWER_ON);
+}
+
+static void inno_mipi_dphy_max_2_5ghz_pll_enable(struct inno_video_phy *inno)
 {
 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x03,
 			REG_PREDIV_MASK, REG_PREDIV(inno->pll.prediv));
@@ -412,7 +491,10 @@ static void inno_mipi_dphy_max_2_5GHz_pll_enable(struct inno_video_phy *inno)
 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x04,
 			REG_FBDIV_LO_MASK, REG_FBDIV_LO(inno->pll.fbdiv));
 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x08,
-			PLL_POST_DIV_ENABLE_MASK, PLL_POST_DIV_ENABLE);
+			PLL_POST_DIV_ENABLE_MASK, PLL_POST_DIV_ENABLE(inno->pll.lowfre_en));
+	if (inno->pll.lowfre_en)
+		phy_update_bits(inno, REGISTER_PART_ANALOG, 0x2a,
+				REG_POSTDIV_MASK, REG_POSTDIV(inno->pll.postdiv));
 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x0b,
 			CLOCK_LANE_VOD_RANGE_SET_MASK,
 			CLOCK_LANE_VOD_RANGE_SET(VOD_MAX_RANGE));
@@ -421,7 +503,7 @@ static void inno_mipi_dphy_max_2_5GHz_pll_enable(struct inno_video_phy *inno)
 			REG_LDOPD_POWER_ON | REG_PLLPD_POWER_ON);
 }
 
-static void inno_mipi_dphy_max_1GHz_pll_enable(struct inno_video_phy *inno)
+static void inno_mipi_dphy_max_1ghz_pll_enable(struct inno_video_phy *inno)
 {
 	/* Configure PLL */
 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x03,
@@ -454,46 +536,37 @@ static void inno_mipi_dphy_reset(struct inno_video_phy *inno)
 
 static void inno_mipi_dphy_timing_init(struct inno_video_phy *inno)
 {
-	struct mipi_dphy_timing gotp;
-	u32 t_txbyteclkhs, t_txclkesc, ui;
+	struct phy_configure_opts_mipi_dphy *cfg = &inno->dphy_cfg;
+	u32 t_txbyteclkhs, t_txclkesc;
 	u32 txbyteclkhs, txclkesc, esc_clk_div;
 	u32 hs_exit, clk_post, clk_pre, wakeup, lpx, ta_go, ta_sure, ta_wait;
-	u32 hs_prepare, hs_trail, hs_zero, clk_lane_hs_zero, data_lane_hs_zero;
+	u32 hs_prepare, hs_trail, clk_lane_hs_trail, data_lane_hs_trail;
+	u32 hs_zero, clk_lane_hs_zero, data_lane_hs_zero;
 	const struct inno_video_mipi_dphy_timing *timing;
 	unsigned int i;
 
 	txbyteclkhs = inno->pll.rate / 8;
 	t_txbyteclkhs = div_u64(PSEC_PER_SEC, txbyteclkhs);
-	esc_clk_div = DIV_ROUND_UP(txbyteclkhs, 20000000);
+	esc_clk_div = DIV_ROUND_UP(txbyteclkhs, 20 * HZ_PER_MHZ);
 	txclkesc = txbyteclkhs / esc_clk_div;
 	t_txclkesc = div_u64(PSEC_PER_SEC, txclkesc);
-
-	ui = div_u64(PSEC_PER_SEC, inno->pll.rate);
-
-	memset(&gotp, 0, sizeof(gotp));
-	mipi_dphy_timing_get_default(&gotp, ui);
 
 	/*
 	 * The value of counter for HS Ths-exit
 	 * Ths-exit = Tpin_txbyteclkhs * value
 	 */
-	hs_exit = DIV_ROUND_UP(gotp.hsexit, t_txbyteclkhs);
-	/*
-	 * The value of counter for HS Tclk-post
-	 * Tclk-post = Tpin_txbyteclkhs * value
-	 */
-	clk_post = DIV_ROUND_UP(gotp.clkpost, t_txbyteclkhs);
+	hs_exit = DIV_ROUND_UP(cfg->hs_exit, t_txbyteclkhs);
 	/*
 	 * The value of counter for HS Tclk-pre
 	 * Tclk-pre = Tpin_txbyteclkhs * value
 	 */
-	clk_pre = DIV_ROUND_UP(gotp.clkpre, t_txbyteclkhs);
+	clk_pre = DIV_ROUND_UP(cfg->clk_pre, t_txbyteclkhs);
 
 	/*
 	 * The value of counter for HS Tlpx Time
 	 * Tlpx = Tpin_txbyteclkhs * (2 + value)
 	 */
-	lpx = DIV_ROUND_UP(gotp.lpx, t_txbyteclkhs);
+	lpx = DIV_ROUND_UP(cfg->lpx, t_txbyteclkhs);
 	if (lpx >= 2)
 		lpx -= 2;
 
@@ -502,19 +575,19 @@ static void inno_mipi_dphy_timing_init(struct inno_video_phy *inno)
 	 * Tta-go for turnaround
 	 * Tta-go = Ttxclkesc * value
 	 */
-	ta_go = DIV_ROUND_UP(gotp.tago, t_txclkesc);
+	ta_go = DIV_ROUND_UP(cfg->ta_go, t_txclkesc);
 	/*
 	 * The value of counter for HS Tta-sure
 	 * Tta-sure for turnaround
 	 * Tta-sure = Ttxclkesc * value
 	 */
-	ta_sure = DIV_ROUND_UP(gotp.tasure, t_txclkesc);
+	ta_sure = DIV_ROUND_UP(cfg->ta_sure, t_txclkesc);
 	/*
 	 * The value of counter for HS Tta-wait
 	 * Tta-wait for turnaround
 	 * Tta-wait = Ttxclkesc * value
 	 */
-	ta_wait = DIV_ROUND_UP(gotp.taget, t_txclkesc);
+	ta_wait = DIV_ROUND_UP(cfg->ta_get, t_txclkesc);
 
 	timing = inno_mipi_dphy_get_timing(inno);
 
@@ -523,31 +596,44 @@ static void inno_mipi_dphy_timing_init(struct inno_video_phy *inno)
 	 * Tlpx = Tpin_txbyteclkhs * (2 + value)
 	 */
 	if (inno->mipi_dphy_info->phy_max_rate == MAX_1GHZ) {
-		lpx = DIV_ROUND_UP(gotp.lpx, t_txbyteclkhs);
+		lpx = DIV_ROUND_UP(cfg->lpx, t_txbyteclkhs);
 		if (lpx >= 2)
 			lpx -= 2;
 	} else {
 		lpx = timing->lpx;
 	}
 
+	/*
+	 * The value of counter for HS Tclk-post
+	 * Tclk-post = Tpin_txbyteclkhs * value
+	 */
+	if (inno->mipi_dphy_info->phy_max_rate >= MAX_2_5GHZ)
+		clk_post = timing->hs_clk_post;
+	else
+		clk_post = DIV_ROUND_UP(cfg->clk_post, t_txbyteclkhs);
+
 	hs_prepare = timing->hs_prepare;
-	hs_trail = timing->hs_trail;
+	clk_lane_hs_trail = timing->clk_lane_hs_trail;
+	data_lane_hs_trail = timing->data_lane_hs_trail;
 	clk_lane_hs_zero = timing->clk_lane_hs_zero;
 	data_lane_hs_zero = timing->data_lane_hs_zero;
 	wakeup = 0x3ff;
 
 	for (i = REGISTER_PART_CLOCK_LANE; i <= REGISTER_PART_DATA3_LANE; i++) {
-		if (i == REGISTER_PART_CLOCK_LANE)
+		if (i == REGISTER_PART_CLOCK_LANE) {
 			hs_zero = clk_lane_hs_zero;
-		else
+			hs_trail = clk_lane_hs_trail;
+		} else {
 			hs_zero = data_lane_hs_zero;
+			hs_trail = data_lane_hs_trail;
+		}
 
 		phy_update_bits(inno, i, 0x05, T_LPX_CNT_MASK,
 				T_LPX_CNT(lpx));
 		phy_update_bits(inno, i, 0x06, T_HS_PREPARE_CNT_MASK,
 				T_HS_PREPARE_CNT(hs_prepare));
 
-		if (inno->mipi_dphy_info->phy_max_rate == MAX_2_5GHZ)
+		if (inno->mipi_dphy_info->phy_max_rate >= MAX_2_5GHZ)
 			phy_update_bits(inno, i, 0x06, T_HS_ZERO_CNT_HI_MASK,
 					T_HS_ZERO_CNT_HI(hs_zero >> 6));
 
@@ -556,14 +642,14 @@ static void inno_mipi_dphy_timing_init(struct inno_video_phy *inno)
 		phy_update_bits(inno, i, 0x08, T_HS_TRAIL_CNT_MASK,
 				T_HS_TRAIL_CNT(hs_trail));
 
-		if (inno->mipi_dphy_info->phy_max_rate == MAX_2_5GHZ)
+		if (inno->mipi_dphy_info->phy_max_rate >= MAX_2_5GHZ)
 			phy_update_bits(inno, i, 0x11, T_HS_EXIT_CNT_HI_MASK,
 					T_HS_EXIT_CNT_HI(hs_exit >> 5));
 
 		phy_update_bits(inno, i, 0x09, T_HS_EXIT_CNT_LO_MASK,
 				T_HS_EXIT_CNT_LO(hs_exit));
 
-		if (inno->mipi_dphy_info->phy_max_rate == MAX_2_5GHZ)
+		if (inno->mipi_dphy_info->phy_max_rate >= MAX_2_5GHZ)
 			phy_update_bits(inno, i, 0x10, T_CLK_POST_HI_MASK,
 					T_CLK_POST_HI(clk_post >> 4));
 
@@ -571,6 +657,12 @@ static void inno_mipi_dphy_timing_init(struct inno_video_phy *inno)
 				T_CLK_POST_CNT_LO(clk_post));
 		phy_update_bits(inno, i, 0x0e, T_CLK_PRE_CNT_MASK,
 				T_CLK_PRE_CNT(clk_pre));
+
+		/* avoid this case that request asserted low after traildone */
+		if (i == REGISTER_PART_CLOCK_LANE && inno->mipi_dphy_info->phy_max_rate == MAX_4_5GHZ)
+			phy_update_bits(inno, i, 0x0e, REG_HSTXCLKDONE_BYP_MASK,
+					REG_HSTXCLKDONE_BYP);
+
 		phy_update_bits(inno, i, 0x0c, T_WAKEUP_CNT_HI_MASK,
 				T_WAKEUP_CNT_HI(wakeup >> 8));
 		phy_update_bits(inno, i, 0x0d, T_WAKEUP_CNT_LO_MASK,
@@ -609,22 +701,31 @@ static void inno_mipi_dphy_lane_enable(struct inno_video_phy *inno)
 
 static void inno_video_phy_mipi_mode_enable(struct inno_video_phy *inno)
 {
-	struct rockchip_phy *phy =
-		(struct rockchip_phy *)dev_get_driver_data(inno->dev);
+	struct inno_video_phy_plat_data *plat_data =
+		(struct inno_video_phy_plat_data *)dev_get_driver_data(inno->dev);
 
 	/* Select MIPI mode */
-	phy_update_bits(inno, REGISTER_PART_LVDS, 0x03,
-			MODE_ENABLE_MASK, MIPI_MODE_ENABLE);
+	if (inno->mipi_dphy_info->phy_max_rate < MAX_4_5GHZ)
+		phy_update_bits(inno, REGISTER_PART_LVDS, 0x03,
+				MODE_ENABLE_MASK, MIPI_MODE_ENABLE);
 
 	/* set px30 pin_txclkesc_0 invert disable */
-	if (phy->soc_type == PX30_VIDEO_PHY || phy->soc_type == PX30S_VIDEO_PHY)
+	if (plat_data->soc_type == PX30_VIDEO_PHY || plat_data->soc_type == PX30S_VIDEO_PHY)
 		phy_update_bits(inno, REGISTER_PART_DIGITAL, 0x01,
 				INVERT_TXCLKESC_MASK, INVERT_TXCLKESC_DISABLE);
 
-	if (inno->mipi_dphy_info->phy_max_rate == MAX_2_5GHZ)
-		inno_mipi_dphy_max_2_5GHz_pll_enable(inno);
-	else
-		inno_mipi_dphy_max_1GHz_pll_enable(inno);
+	switch (inno->mipi_dphy_info->phy_max_rate) {
+	case MAX_4_5GHZ:
+		inno_mipi_dphy_max_4_5ghz_pll_enable(inno);
+		break;
+	case MAX_2_5GHZ:
+		inno_mipi_dphy_max_2_5ghz_pll_enable(inno);
+		break;
+	case MAX_1GHZ:
+	default:
+		inno_mipi_dphy_max_1ghz_pll_enable(inno);
+		break;
+	}
 
 	inno_mipi_dphy_reset(inno);
 	inno_mipi_dphy_timing_init(inno);
@@ -702,7 +803,7 @@ static void inno_video_phy_lvds_mode_enable(struct inno_video_phy *inno)
 	ret = readl_poll_timeout(inno->host.start + DSI_PHY_STATUS,
 				 val, val & PHY_LOCK, 10000);
 	if (ret)
-		dev_err(phy->dev, "PLL is not lock\n");
+		dev_err(inno->dev, "PLL is not lock\n");
 
 	/* Select PLL mode */
 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x1e,
@@ -745,35 +846,50 @@ static void inno_video_phy_ttl_mode_enable(struct inno_video_phy *inno)
 	host_update_bits(inno, DSI_PHY_RSTZ, PHY_ENABLECLK, PHY_ENABLECLK);
 }
 
-static int inno_video_phy_power_on(struct rockchip_phy *phy)
+static int inno_video_phy_power_on(struct phy *phy)
 {
 	struct inno_video_phy *inno = dev_get_priv(phy->dev);
 
 	/* Bandgap power on */
 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x00,
 			BANDGAP_POWER_MASK, BANDGAP_POWER_ON);
-	/* Enable power work */
-	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x00,
-			POWER_WORK_MASK, POWER_WORK_ENABLE);
+	/*
+	 * Enable power work
+	 *
+	 * for inno MIPI D-PHY version 1.0、1.2:
+	 * bits[1:0] = 0x00/0x01: power work enable
+	 * bits[1:0] = 0x02: power work disable
+	 * bits[1:0] = 0x03: reserved
+	 *
+	 * for inno MIPI D-PHY version 2.0:
+	 *
+	 * bits[1:0] = 0x00/0x01: power work reset
+	 * bits[1:0] = 0x02: power work disable
+	 * bits[1:0] = 0x03: power work enable
+	 */
+	if (inno->mipi_dphy_info->phy_max_rate >= MAX_4_5GHZ)
+		phy_update_bits(inno, REGISTER_PART_ANALOG, 0x00,
+				POWER_WORK_MASK, POWER_WORK(3));
+	else
+		phy_update_bits(inno, REGISTER_PART_ANALOG, 0x00,
+				POWER_WORK_MASK, POWER_WORK(1));
 
 	switch (inno->mode) {
 	case PHY_MODE_MIPI_DPHY:
 		inno_video_phy_mipi_mode_enable(inno);
 		break;
-	case PHY_MODE_VIDEO_LVDS:
+	case PHY_MODE_LVDS:
 		inno_video_phy_lvds_mode_enable(inno);
 		break;
-	case PHY_MODE_VIDEO_TTL:
+	default:
 		inno_video_phy_ttl_mode_enable(inno);
 		break;
-	default:
-		return -EINVAL;
 	}
 
 	return 0;
 }
 
-static int inno_video_phy_power_off(struct rockchip_phy *phy)
+static int inno_video_phy_power_off(struct phy *phy)
 {
 	struct inno_video_phy *inno = dev_get_priv(phy->dev);
 
@@ -797,12 +913,104 @@ static int inno_video_phy_power_off(struct rockchip_phy *phy)
 	return 0;
 }
 
-static unsigned long inno_video_phy_pll_round_rate(unsigned long prate,
-						   unsigned long rate,
-						   u8 *prediv, u16 *fbdiv)
+static unsigned long
+inno_video_phy_max_2_5ghz_or_4_5ghz_pll_round_rate(struct inno_video_phy *inno,
+						   unsigned long prate,
+						   unsigned long rate)
 {
-	unsigned long best_freq = 0;
-	unsigned long fref, fout;
+	u64 max_rate = inno->mipi_dphy_info->phy_max_rate;
+	u64 max_vco = (inno->mipi_dphy_info->phy_max_rate == MAX_4_5GHZ ? 5000 : 3000) * HZ_PER_MHZ;
+	u64 min_vco = 1000 * HZ_PER_MHZ;
+	u64 fvco;
+	u64 best_freq = 0;
+	u64 fref, fout;
+	u8 min_prediv, max_prediv;
+	u8 _prediv, best_prediv = 1;
+	u16 _fbdiv, best_fbdiv = 1;
+	u16 _postdiv, best_postdiv = 1;
+	u32 min_delta = 0xffffffff;
+
+	/*
+	 * The PLL output frequency can be calculated using a simple formula:
+	 * PLL_Output_Frequency = FREF * FBDIV / (PREDIV * POSTDIV * 2) (reg08[5]=1)
+	 *
+	 * As the recommended VCO_Frequency range is (1~3GHz) or (1~5GHz), to make the
+	 * PHY work at high frequency such as 2.5Gbps in MIPI mode, set the reg08[5]=0:
+	 *
+	 * PLL_Output_Frequency = VCO_Frequency = FREF * FBDIV / PREDIV
+	 *
+	 * PLL_Output_Frequency: it is equal to DDR-Clock-Frequency * 2
+	 */
+	fref = prate;
+	if (!fref)
+		return 0;
+
+	if (rate > max_rate)
+		fout = max_rate;
+	else
+		fout = rate;
+
+	/* 10Mhz < Fref / prediv < 100MHz */
+	min_prediv = DIV_ROUND_UP(fref, 100 * HZ_PER_MHZ);
+	max_prediv = div64_ul(fref, 10 * HZ_PER_MHZ);
+
+	for (_postdiv = 0; _postdiv <= 31; _postdiv++) {
+		fvco = fout * (_postdiv ? _postdiv * 2 : 1);
+		if (fvco < min_vco || fvco > max_vco)
+			continue;
+
+		for (_prediv = min_prediv; _prediv <= max_prediv; _prediv++) {
+			u64 tmp;
+			u32 delta;
+
+			if (!_prediv)
+				continue;
+
+			tmp = fvco * _prediv;
+			_fbdiv = div64_ul(tmp, fref);
+
+			if (_fbdiv < 1 || _fbdiv > 511)
+				continue;
+
+			tmp = (u64)_fbdiv * fref;
+			tmp = div64_ul(tmp, _prediv * (_postdiv ? _postdiv * 2 : 1));
+
+			delta = abs(fout - tmp);
+			if (!delta) {
+				best_prediv = _prediv;
+				best_fbdiv = _fbdiv;
+				best_postdiv = _postdiv;
+				best_freq = tmp;
+				break;
+			} else if (delta < min_delta) {
+				best_prediv = _prediv;
+				best_fbdiv = _fbdiv;
+				best_postdiv = _postdiv;
+				best_freq = tmp;
+				min_delta = delta;
+			}
+		}
+	}
+
+	if (best_freq) {
+		inno->pll.prediv = best_prediv;
+		inno->pll.fbdiv = best_fbdiv;
+		inno->pll.postdiv = best_postdiv;
+		inno->pll.rate = best_freq;
+		inno->pll.lowfre_en = best_postdiv ? true : false;
+	}
+
+	return best_freq;
+}
+
+static unsigned long
+inno_video_phy_max_1ghz_or_1_5ghz_pll_round_rate(struct inno_video_phy *inno,
+						 unsigned long prate,
+						 unsigned long rate)
+{
+	unsigned long long max_rate = inno->mipi_dphy_info->phy_max_rate;
+	unsigned long long best_freq = 0;
+	unsigned long long fref, fout;
 	u8 min_prediv, max_prediv;
 	u8 _prediv, best_prediv = 1;
 	u16 _fbdiv, best_fbdiv = 1;
@@ -814,22 +1022,24 @@ static unsigned long inno_video_phy_pll_round_rate(unsigned long prate,
 	 * PLL_Output_Frequency: it is equal to DDR-Clock-Frequency * 2
 	 */
 	fref = prate / 2;
-	if (rate > 1000000000UL)
-		fout = 1000000000UL;
+	if (!fref)
+		return 0;
+
+	if (rate > max_rate)
+		fout = max_rate;
 	else
 		fout = rate;
 
 	/* 5Mhz < Fref / prediv < 40MHz */
-	min_prediv = DIV_ROUND_UP(fref, 40000000);
-	max_prediv = fref / 5000000;
+	min_prediv = DIV_ROUND_UP(fref, 40 * HZ_PER_MHZ);
+	max_prediv = lldiv(fref, 5 * HZ_PER_MHZ);
 
 	for (_prediv = min_prediv; _prediv <= max_prediv; _prediv++) {
 		u64 tmp;
 		u32 delta;
 
 		tmp = (u64)fout * _prediv;
-		do_div(tmp, fref);
-		_fbdiv = tmp;
+		_fbdiv = lldiv(tmp, fref);
 
 		/*
 		 * The all possible settings of feedback divider are
@@ -859,47 +1069,58 @@ static unsigned long inno_video_phy_pll_round_rate(unsigned long prate,
 	}
 
 	if (best_freq) {
-		*prediv = best_prediv;
-		*fbdiv = best_fbdiv;
+		inno->pll.prediv = best_prediv;
+		inno->pll.fbdiv = best_fbdiv;
+		inno->pll.rate = best_freq;
 	}
 
 	return best_freq;
 }
 
-static unsigned long inno_video_phy_set_pll(struct rockchip_phy *phy,
-					    unsigned long rate)
+static int inno_video_phy_configure(struct phy *phy, union phy_configure_opts *phy_opts)
 {
 	struct inno_video_phy *inno = dev_get_priv(phy->dev);
-	unsigned long fin, fout;
-	u16 fbdiv = 1;
-	u8 prediv = 1;
+	struct phy_configure_opts_mipi_dphy *cfg = &inno->dphy_cfg;
+	struct phy_configure_opts_mipi_dphy *opts = &phy_opts->mipi_dphy;
+	enum phy_mode mode = generic_phy_get_mode(phy);
+	unsigned long fin = 24 * HZ_PER_MHZ;
+	unsigned long long fout;
+	int ret;
 
-	fin = 24000000;
-	fout = inno_video_phy_pll_round_rate(fin, rate, &prediv, &fbdiv);
+	if (mode != PHY_MODE_MIPI_DPHY)
+		return -EINVAL;
 
-	dev_dbg(phy->dev, "fin=%lu, fout=%lu, prediv=%u, fbdiv=%u\n",
-		fin, fout, prediv, fbdiv);
+	ret = phy_mipi_dphy_config_validate(opts);
+	if (ret)
+		return ret;
 
-	inno->pll.prediv = prediv;
-	inno->pll.fbdiv = fbdiv;
-	inno->pll.rate = fout;
+	memcpy(&inno->dphy_cfg, opts, sizeof(inno->dphy_cfg));
 
-	return fout;
+	if (inno->mipi_dphy_info->phy_max_rate >= MAX_2_5GHZ)
+		inno_video_phy_max_2_5ghz_or_4_5ghz_pll_round_rate(inno, fin, cfg->hs_clk_rate);
+	else
+		inno_video_phy_max_1ghz_or_1_5ghz_pll_round_rate(inno, fin, cfg->hs_clk_rate);
+
+	dev_dbg(phy->dev, "fin=%lu, fout=%llu, prediv=%u, fbdiv=%u\n",
+		fin, fout, inno->pll.prediv, inno->pll.fbdiv);
+
+	cfg->hs_clk_rate = inno->pll.rate;
+	opts->hs_clk_rate = inno->pll.rate;
+
+	return 0;
 }
 
-static int inno_video_phy_set_mode(struct rockchip_phy *phy,
-				   enum phy_mode mode)
+static int inno_video_phy_set_mode(struct phy *phy, enum phy_mode mode, int submode)
 {
 	struct inno_video_phy *inno = dev_get_priv(phy->dev);
 
 	switch (mode) {
 	case PHY_MODE_MIPI_DPHY:
-	case PHY_MODE_VIDEO_LVDS:
-	case PHY_MODE_VIDEO_TTL:
+	case PHY_MODE_LVDS:
 		inno->mode = mode;
 		break;
 	default:
-		return -EINVAL;
+		break;
 	}
 
 	return 0;
@@ -908,20 +1129,12 @@ static int inno_video_phy_set_mode(struct rockchip_phy *phy,
 static int inno_video_phy_probe(struct udevice *dev)
 {
 	struct inno_video_phy *inno = dev_get_priv(dev);
-	struct rockchip_phy *tmp_phy;
-	struct rockchip_phy *phy;
+	struct inno_video_phy_plat_data *plat_data =
+		(struct inno_video_phy_plat_data *)dev_get_driver_data(dev);
 	int ret;
 
-	phy = calloc(1, sizeof(*phy));
-	if (!phy)
-		return -ENOMEM;
-
-	tmp_phy = (struct rockchip_phy *)dev_get_driver_data(dev);
-	dev->driver_data = (ulong)phy;
-	memcpy(phy, tmp_phy, sizeof(*phy));
-
 	inno->dev = dev;
-	inno->mipi_dphy_info = phy->data;
+	inno->mipi_dphy_info = plat_data->info;
 	if (soc_is_px30s())
 		inno->mipi_dphy_info = &inno_video_mipi_dphy_max_2_5GHz;
 
@@ -941,46 +1154,44 @@ static int inno_video_phy_probe(struct udevice *dev)
 		return ret;
 	}
 
-	phy->dev = dev;
-
 	return 0;
 }
 
-static const struct rockchip_phy_funcs inno_video_phy_funcs = {
-	.power_on = inno_video_phy_power_on,
-	.power_off = inno_video_phy_power_off,
-	.set_pll = inno_video_phy_set_pll,
-	.set_mode = inno_video_phy_set_mode,
+static const struct phy_ops inno_video_phy_ops = {
+	.power_on	= inno_video_phy_power_on,
+	.power_off	= inno_video_phy_power_off,
+	.set_mode	= inno_video_phy_set_mode,
+	.configure	= inno_video_phy_configure,
 };
 
-static struct rockchip_phy px30_inno_video_phy_driver_data = {
+static struct inno_video_phy_plat_data px30_inno_video_phy_driver_data = {
 	.soc_type = PX30_VIDEO_PHY,
-	.funcs = &inno_video_phy_funcs,
-	.data = &inno_video_mipi_dphy_max_1GHz,
+	.info = &inno_video_mipi_dphy_max_1GHz,
 };
 
-static struct rockchip_phy px30s_inno_video_phy_driver_data = {
+static struct inno_video_phy_plat_data px30s_inno_video_phy_driver_data = {
 	.soc_type = PX30S_VIDEO_PHY,
-	.funcs = &inno_video_phy_funcs,
-	.data = &inno_video_mipi_dphy_max_2_5GHz,
+	.info = &inno_video_mipi_dphy_max_2_5GHz,
 };
 
-static struct rockchip_phy rk3128_inno_video_phy_driver_data = {
+static struct inno_video_phy_plat_data rk3128_inno_video_phy_driver_data = {
 	.soc_type = RK3128_VIDEO_PHY,
-	.funcs = &inno_video_phy_funcs,
-	.data = &inno_video_mipi_dphy_max_1GHz,
+	.info = &inno_video_mipi_dphy_max_1GHz,
 };
 
-static struct rockchip_phy rk3368_inno_video_phy_driver_data = {
+static struct inno_video_phy_plat_data rk3368_inno_video_phy_driver_data = {
 	.soc_type = RK3368_VIDEO_PHY,
-	.funcs = &inno_video_phy_funcs,
-	.data = &inno_video_mipi_dphy_max_1GHz,
+	.info = &inno_video_mipi_dphy_max_1GHz,
 };
 
-static struct rockchip_phy rk3568_inno_video_phy_driver_data = {
+static struct inno_video_phy_plat_data rk3568_inno_video_phy_driver_data = {
 	.soc_type = RK3568_VIDEO_PHY,
-	.funcs = &inno_video_phy_funcs,
-	.data = &inno_video_mipi_dphy_max_2_5GHz,
+	.info = &inno_video_mipi_dphy_max_2_5GHz,
+};
+
+static struct inno_video_phy_plat_data rk3572_inno_video_phy_driver_data = {
+	.soc_type = RK3572_VIDEO_PHY,
+	.info = &inno_video_mipi_dphy_max_4_5GHz,
 };
 
 static const struct udevice_id inno_video_phy_ids[] = {
@@ -1004,12 +1215,17 @@ static const struct udevice_id inno_video_phy_ids[] = {
 		.compatible = "rockchip,rk3568-video-phy",
 		.data = (ulong)&rk3568_inno_video_phy_driver_data,
 	},
+	{
+		.compatible = "rockchip,rk3572-video-phy",
+		.data = (ulong)&rk3572_inno_video_phy_driver_data,
+	},
 	{}
 };
 
 U_BOOT_DRIVER(inno_video_combo_phy) = {
 	.name = "inno_video_combo_phy",
 	.id = UCLASS_PHY,
+	.ops = &inno_video_phy_ops,
 	.of_match = inno_video_phy_ids,
 	.probe = inno_video_phy_probe,
 	.priv_auto_alloc_size = sizeof(struct inno_video_phy),

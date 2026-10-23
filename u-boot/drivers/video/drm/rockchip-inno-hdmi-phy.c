@@ -7,6 +7,8 @@
 #include <config.h>
 #include <common.h>
 #include <errno.h>
+#include <generic-phy.h>
+#include <generic-phy-hdmi.h>
 #include <malloc.h>
 #include <misc.h>
 #include <fdtdec.h>
@@ -24,7 +26,6 @@
 #include "rockchip_display.h"
 #include "rockchip_crtc.h"
 #include "rockchip_connector.h"
-#include "rockchip_phy.h"
 
 #define INNO_HDMI_PHY_TIMEOUT_LOOP_COUNT	1000
 #define UPDATE(x, h, l)	(((x) << (l)) & GENMASK((h), (l)))
@@ -170,6 +171,7 @@ struct inno_hdmi_phy {
 	unsigned long pixclock;
 	u32 bus_width;
 	struct phy_config *phy_cfg;
+	struct phy *phy;
 };
 
 struct pre_pll_config {
@@ -228,32 +230,48 @@ struct clk_inno_hdmi {
 static struct inno_hdmi_phy *g_inno;
 
 static const struct pre_pll_config pre_pll_cfg_table[] = {
-	{ 27000000,  27000000, 1,  90, 3, 2, 2, 10, 3, 3, 4, 0, 0},
-	{ 27000000,  33750000, 1,  90, 1, 3, 3, 10, 3, 3, 4, 0, 0},
-	{ 40000000,  40000000, 1,  80, 2, 2, 2, 12, 2, 2, 2, 0, 0},
-	{ 59341000,  59341000, 1,  98, 3, 1, 2,  1, 3, 3, 4, 0, 0xE6AE6B},
-	{ 59400000,  59400000, 1,  99, 3, 1, 1,  1, 3, 3, 4, 0, 0},
-	{ 59341000,  74176250, 1,  98, 0, 3, 3,  1, 3, 3, 4, 0, 0xE6AE6B},
-	{ 59400000,  74250000, 1,  99, 1, 2, 2,  1, 3, 3, 4, 0, 0},
-	{ 74176000,  74176000, 1,  98, 1, 2, 2,  1, 2, 3, 4, 0, 0xE6AE6B},
-	{ 74250000,  74250000, 1,  99, 1, 2, 2,  1, 2, 3, 4, 0, 0},
-	{ 74176000,  92720000, 4, 494, 1, 2, 2,  1, 3, 3, 4, 0, 0x816817},
-	{ 74250000,  92812500, 4, 495, 1, 2, 2,  1, 3, 3, 4, 0, 0},
-	{148352000, 148352000, 1,  98, 1, 1, 1,  1, 2, 2, 2, 0, 0xE6AE6B},
-	{148500000, 148500000, 1,  99, 1, 1, 1,  1, 2, 2, 2, 0, 0},
-	{148352000, 185440000, 4, 494, 0, 2, 2,  1, 3, 2, 2, 0, 0x816817},
-	{148500000, 185625000, 4, 495, 0, 2, 2,  1, 3, 2, 2, 0, 0},
-	{296703000, 296703000, 1,  98, 0, 1, 1,  1, 0, 2, 2, 0, 0xE6AE6B},
-	{297000000, 297000000, 1,  99, 0, 1, 1,  1, 0, 2, 2, 0, 0},
-	{296703000, 370878750, 4, 494, 1, 2, 0,  1, 3, 1, 1, 0, 0x816817},
-	{297000000, 371250000, 4, 495, 1, 2, 0,  1, 3, 1, 1, 0, 0},
-	{593407000, 296703500, 1,  98, 0, 1, 1,  1, 0, 2, 1, 0, 0xE6AE6B},
-	{594000000, 297000000, 1,  99, 0, 1, 1,  1, 0, 2, 1, 0, 0},
-	{593407000, 370879375, 4, 494, 1, 2, 0,  1, 3, 1, 1, 1, 0x816817},
-	{594000000, 371250000, 4, 495, 1, 2, 0,  1, 3, 1, 1, 1, 0},
-	{593407000, 593407000, 1,  98, 0, 2, 0,  1, 0, 1, 1, 0, 0xE6AE6B},
-	{594000000, 594000000, 1,  99, 0, 2, 0,  1, 0, 1, 1, 0, 0},
-	{     ~0UL,	    0, 0,   0, 0, 0, 0,  0, 0, 0, 0, 0, 0}
+	{ 27000000,  27000000, 1,  90, 3, 2, 2, 10, 3, 3,  4, 0, 0},
+	{ 27000000,  33750000, 1,  90, 1, 3, 3, 10, 3, 3,  4, 0, 0},
+	{ 40000000,  40000000, 1,  80, 2, 2, 2, 12, 2, 2,  2, 0, 0},
+	{ 40000000,  50000000, 1, 100, 2, 2, 2,  1, 0, 0, 15, 0, 0},
+	{ 59341000,  59341000, 1,  98, 3, 1, 2,  1, 3, 3,  4, 0, 0xE6AE6B},
+	{ 59400000,  59400000, 1,  99, 3, 1, 1,  1, 3, 3,  4, 0, 0},
+	{ 59341000,  74176250, 1,  98, 0, 3, 3,  1, 3, 3,  4, 0, 0xE6AE6B},
+	{ 59400000,  74250000, 1,  99, 1, 2, 2,  1, 3, 3,  4, 0, 0},
+	{ 65000000,  65000000, 1, 130, 2, 2, 2,  1, 0, 0, 12, 0, 0},
+	{ 65000000,  81250000, 3, 325, 0, 3, 3,  1, 0, 0, 10, 0, 0},
+	{ 71000000,  71000000, 3, 284, 0, 3, 3,  1, 0, 0,  8, 0, 0},
+	{ 71000000,  88750000, 3, 355, 0, 3, 3,  1, 0, 0, 10, 0, 0},
+	{ 74176000,  74176000, 1,  98, 1, 2, 2,  1, 2, 3,  4, 0, 0xE6AE6B},
+	{ 74250000,  74250000, 1,  99, 1, 2, 2,  1, 2, 3,  4, 0, 0},
+	{ 74176000,  92720000, 4, 494, 1, 2, 2,  1, 3, 3,  4, 0, 0x816817},
+	{ 74250000,  92812500, 4, 495, 1, 2, 2,  1, 3, 3,  4, 0, 0},
+	{ 83500000,  83500000, 2, 167, 2, 1, 1,  1, 0, 0,  6, 0, 0},
+	{ 83500000, 104375000, 1, 104, 2, 1, 1,  1, 1, 0,  5, 0, 0x600000},
+	{ 85750000,  85750000, 3, 343, 0, 3, 3,  1, 0, 0,  8, 0, 0},
+	{ 88750000,  88750000, 3, 355, 0, 3, 3,  1, 0, 0,  8, 0, 0},
+	{ 88750000, 110937500, 1, 110, 2, 1, 1,  1, 1, 0,  5, 0, 0xF00000},
+	{108000000, 108000000, 1,  90, 3, 0, 0,  1, 0, 0,  5, 0, 0},
+	{108000000, 135000000, 1,  90, 0, 2, 2,  1, 0, 0,  5, 0, 0},
+	{119000000, 119000000, 1, 119, 2, 1, 1,  1, 0, 0,  6, 0, 0},
+	{119000000, 148750000, 1,  99, 0, 2, 2,  1, 0, 0,  5, 0, 0x2AAAAA},
+	{148352000, 148352000, 1,  98, 1, 1, 1,  1, 2, 2,  2, 0, 0xE6AE6B},
+	{148500000, 148500000, 1,  99, 1, 1, 1,  1, 2, 2,  2, 0, 0},
+	{148352000, 185440000, 4, 494, 0, 2, 2,  1, 3, 2,  2, 0, 0x816817},
+	{148500000, 185625000, 4, 495, 0, 2, 2,  1, 3, 2,  2, 0, 0},
+	{162000000, 162000000, 1, 108, 0, 2, 2,  1, 0, 0,  4, 0, 0},
+	{162000000, 202500000, 1, 135, 0, 2, 2,  1, 0, 0,  5, 0, 0},
+	{296703000, 296703000, 1,  98, 0, 1, 1,  1, 0, 2,  2, 0, 0xE6AE6B},
+	{297000000, 297000000, 1,  99, 0, 1, 1,  1, 0, 2,  2, 0, 0},
+	{296703000, 370878750, 4, 494, 1, 2, 0,  1, 3, 1,  1, 0, 0x816817},
+	{297000000, 371250000, 4, 495, 1, 2, 0,  1, 3, 1,  1, 0, 0},
+	{593407000, 296703500, 1,  98, 0, 1, 1,  1, 0, 2,  1, 0, 0xE6AE6B},
+	{594000000, 297000000, 1,  99, 0, 1, 1,  1, 0, 2,  1, 0, 0},
+	{593407000, 370879375, 4, 494, 1, 2, 0,  1, 3, 1,  1, 1, 0x816817},
+	{594000000, 371250000, 4, 495, 1, 2, 0,  1, 3, 1,  1, 1, 0},
+	{593407000, 593407000, 1,  98, 0, 2, 0,  1, 0, 1,  1, 0, 0xE6AE6B},
+	{594000000, 594000000, 1,  99, 0, 2, 0,  1, 0, 1,  1, 0, 0},
+	{     ~0UL,         0, 0,   0, 0, 0, 0,  0, 0, 0,  0, 0, 0}
 };
 
 static const struct post_pll_config post_pll_cfg_table[] = {
@@ -382,7 +400,7 @@ static u32 inno_hdmi_phy_get_tmdsclk(struct inno_hdmi_phy *inno,
 {
 	u32 tmdsclk;
 
-	switch (inno->bus_width) {
+	switch (generic_phy_get_bus_width(inno->phy)) {
 	case 4:
 		tmdsclk = (u32)rate / 2;
 		break;
@@ -447,7 +465,7 @@ static u8 rk_get_cpu_version(void)
 	return val;
 }
 
-static int inno_hdmi_phy_power_on(struct rockchip_phy *phy)
+static int inno_hdmi_phy_power_on(struct phy *phy)
 {
 #ifdef CONFIG_SPL_BUILD
 	struct inno_hdmi_phy *inno = (struct inno_hdmi_phy *)phy->data;
@@ -499,7 +517,7 @@ static int inno_hdmi_phy_power_on(struct rockchip_phy *phy)
 		return -EINVAL;
 }
 
-static int inno_hdmi_phy_power_off(struct rockchip_phy *phy)
+static int inno_hdmi_phy_power_off(struct phy *phy)
 {
 #ifdef CONFIG_SPL_BUILD
 	struct inno_hdmi_phy *inno = (struct inno_hdmi_phy *)phy->data;
@@ -1220,7 +1238,7 @@ static const struct rockchip_inno_data inno_hdmi_phy_of_match[] = {
 	{}
 };
 
-static int inno_hdmi_phy_init(struct rockchip_phy *phy)
+static int inno_hdmi_phy_init(struct phy *phy)
 {
 #ifdef CONFIG_SPL_BUILD
 	struct inno_hdmi_phy *inno = (struct inno_hdmi_phy *)phy->data;
@@ -1243,7 +1261,7 @@ static int inno_hdmi_phy_init(struct rockchip_phy *phy)
 		printf("%s: failed to get phy address\n", __func__);
 		return -ENOMEM;
 	}
-
+	inno->phy = phy;
 #ifdef CONFIG_SPL_BUILD
 	name = "rockchip,rk3528-hdmi-phy";
 #else
@@ -1306,8 +1324,7 @@ static int inno_hdmi_phy_init(struct rockchip_phy *phy)
 	return 0;
 }
 
-static unsigned long inno_hdmi_phy_set_pll(struct rockchip_phy *phy,
-					   unsigned long rate)
+static int inno_hdmi_phy_set_pll(struct phy *phy, int rate)
 {
 #ifdef CONFIG_SPL_BUILD
 	struct inno_hdmi_phy *inno = (struct inno_hdmi_phy *)phy->data;
@@ -1325,27 +1342,120 @@ static unsigned long inno_hdmi_phy_set_pll(struct rockchip_phy *phy,
 	return 0;
 }
 
-static int
-inno_hdmi_phy_set_bus_width(struct rockchip_phy *phy, u32 bus_width)
-{
+static const struct phy_ops inno_hdmi_phy_funcs = {
+	.init = inno_hdmi_phy_init,
+	.power_on = inno_hdmi_phy_power_on,
+	.power_off = inno_hdmi_phy_power_off,
+	.set_speed = inno_hdmi_phy_set_pll
+};
+
+static const struct udevice_id inno_hdmi_phy_ids[] = {
+	{
+	 .compatible = "rockchip,rk3328-hdmi-phy",
+	},
+	{
+	 .compatible = "rockchip,rk3228-hdmi-phy",
+	},
+	{
+	 .compatible = "rockchip,rk3528-hdmi-phy",
+	},
+	{
+	 .compatible = "rockchip,rk3538-hdmi-phy",
+	},
+	{}
+};
+
 #ifdef CONFIG_SPL_BUILD
-	struct inno_hdmi_phy *inno = (struct inno_hdmi_phy *)phy->data;
+int inno_spl_hdmi_phy_probe(struct display_state *state)
+{
+	struct inno_hdmi_phy *inno = malloc(sizeof(struct inno_hdmi_phy));
+
+	memset(inno, 0, sizeof(*inno));
+	g_inno = inno;
+
+	state->conn_state.connector->phy = &inno_hdmi_phy_driver_data;
+	state->conn_state.connector->phy->data = (void *)inno;
+	return 0;
+}
 #else
-	struct inno_hdmi_phy *inno = dev_get_priv(phy->dev);
+static int inno_hdmi_phy_probe(struct udevice *dev)
+{
+	struct inno_hdmi_phy *inno = dev_get_priv(dev);
+
+	inno->dev = dev;
+
+	g_inno = inno;
+
+	return 0;
+}
 #endif
 
-	inno->bus_width = bus_width;
+static int rockchip_inno_phy_hdmi_bind(struct udevice *parent)
+{
+	struct udevice *child;
+	ofnode subnode;
+	int ret;
+
+	subnode = ofnode_find_subnode(parent->node, "clk-port");
+	if (!ofnode_valid(subnode)) {
+		printf("%s: no subnode for %s\n", __func__, parent->name);
+		return -ENXIO;
+	}
+
+	ret = device_bind_driver_to_node(parent, "clk_inno_hdmi", "inno_hdmi_pll_clk", subnode, &child);
+	if (ret) {
+		printf("%s: clk-port cannot bind its driver\n", __func__);
+		return ret;
+	}
 
 	return 0;
 }
 
-static long
-inno_hdmi_phy_clk_round_rate(struct rockchip_phy *phy, unsigned long rate)
+U_BOOT_DRIVER(inno_hdmi_phy) = {
+	.name = "inno_hdmi_phy",
+	.id = UCLASS_PHY,
+	.of_match = inno_hdmi_phy_ids,
+	.ops = &inno_hdmi_phy_funcs,
+#ifndef CONFIG_SPL_BUILD
+	.probe = inno_hdmi_phy_probe,
+#endif
+	.bind = rockchip_inno_phy_hdmi_bind,
+	.priv_auto_alloc_size = sizeof(struct inno_hdmi_phy),
+};
+
+
+static ulong inno_hdmi_clk_get_rate(struct clk *clk)
+{
+	struct clk_inno_hdmi *priv = dev_get_priv(clk->dev);
+
+	return priv->rate;
+}
+
+static ulong inno_hdmi_clk_set_rate(struct clk *clk, ulong rate)
+{
+	struct clk_inno_hdmi *priv = dev_get_priv(clk->dev);
+	int ret;
+
+	inno_hdmi_phy_clk_prepare(g_inno);
+	inno_hdmi_phy_clk_is_prepared(g_inno);
+	ret = inno_hdmi_phy_clk_set_rate(g_inno, rate);
+	if (ret < 0) {
+		printf("inno hdmi set rate failed ret:%d\n", ret);
+		return ret;
+	}
+
+	priv->rate = g_inno->pixclock;
+
+	return priv->rate;
+}
+
+static ulong
+inno_hdmi_phy_clk_round_rate(struct clk *clk, ulong rate)
 {
 #ifdef CONFIG_SPL_BUILD
 	struct inno_hdmi_phy *inno = (struct inno_hdmi_phy *)phy->data;
 #else
-	struct inno_hdmi_phy *inno = dev_get_priv(phy->dev);
+	struct inno_hdmi_phy *inno = g_inno;
 #endif
 	int i;
 	const struct pre_pll_config *cfg = pre_pll_cfg_table;
@@ -1383,126 +1493,10 @@ inno_hdmi_phy_clk_round_rate(struct rockchip_phy *phy, unsigned long rate)
 	return cfg->pixclock;
 }
 
-const struct rockchip_phy_funcs inno_hdmi_phy_funcs = {
-	.init = inno_hdmi_phy_init,
-	.power_on = inno_hdmi_phy_power_on,
-	.power_off = inno_hdmi_phy_power_off,
-	.set_pll = inno_hdmi_phy_set_pll,
-	.set_bus_width = inno_hdmi_phy_set_bus_width,
-	.round_rate = inno_hdmi_phy_clk_round_rate,
-};
-
-static struct rockchip_phy inno_hdmi_phy_driver_data = {
-	 .funcs = &inno_hdmi_phy_funcs,
-};
-
-static const struct udevice_id inno_hdmi_phy_ids[] = {
-	{
-	 .compatible = "rockchip,rk3328-hdmi-phy",
-	 .data = (ulong)&inno_hdmi_phy_driver_data,
-	},
-	{
-	 .compatible = "rockchip,rk3228-hdmi-phy",
-	 .data = (ulong)&inno_hdmi_phy_driver_data,
-	},
-	{
-	 .compatible = "rockchip,rk3528-hdmi-phy",
-	 .data = (ulong)&inno_hdmi_phy_driver_data,
-	},
-	{}
-};
-
-#ifdef CONFIG_SPL_BUILD
-int inno_spl_hdmi_phy_probe(struct display_state *state)
-{
-	struct inno_hdmi_phy *inno = malloc(sizeof(struct inno_hdmi_phy));
-
-	memset(inno, 0, sizeof(*inno));
-	g_inno = inno;
-
-	state->conn_state.connector->phy = &inno_hdmi_phy_driver_data;
-	state->conn_state.connector->phy->data = (void *)inno;
-	return 0;
-}
-#else
-static int inno_hdmi_phy_probe(struct udevice *dev)
-{
-	struct inno_hdmi_phy *inno = dev_get_priv(dev);
-	struct rockchip_phy *phy =
-		(struct rockchip_phy *)dev_get_driver_data(dev);
-
-	inno->dev = dev;
-	phy->dev = dev;
-
-	g_inno = inno;
-	dev->driver_data = (ulong)&inno_hdmi_phy_driver_data;
-	phy = &inno_hdmi_phy_driver_data;
-
-	return 0;
-}
-#endif
-
-static int rockchip_inno_phy_hdmi_bind(struct udevice *parent)
-{
-	struct udevice *child;
-	ofnode subnode;
-	int ret;
-
-	subnode = ofnode_find_subnode(parent->node, "clk-port");
-	if (!ofnode_valid(subnode)) {
-		printf("%s: no subnode for %s\n", __func__, parent->name);
-		return -ENXIO;
-	}
-
-	ret = device_bind_driver_to_node(parent, "clk_inno_hdmi", "inno_hdmi_pll_clk", subnode, &child);
-	if (ret) {
-		printf("%s: clk-port cannot bind its driver\n", __func__);
-		return ret;
-	}
-
-	return 0;
-}
-
-U_BOOT_DRIVER(inno_hdmi_phy) = {
-	.name = "inno_hdmi_phy",
-	.id = UCLASS_PHY,
-	.of_match = inno_hdmi_phy_ids,
-#ifndef CONFIG_SPL_BUILD
-	.probe = inno_hdmi_phy_probe,
-#endif
-	.bind = rockchip_inno_phy_hdmi_bind,
-	.priv_auto_alloc_size = sizeof(struct inno_hdmi_phy),
-};
-
-
-static ulong inno_hdmi_clk_get_rate(struct clk *clk)
-{
-	struct clk_inno_hdmi *priv = dev_get_priv(clk->dev);
-
-	return priv->rate;
-}
-
-static ulong inno_hdmi_clk_set_rate(struct clk *clk, ulong rate)
-{
-	struct clk_inno_hdmi *priv = dev_get_priv(clk->dev);
-	int ret;
-
-	inno_hdmi_phy_clk_prepare(g_inno);
-	inno_hdmi_phy_clk_is_prepared(g_inno);
-	ret = inno_hdmi_phy_clk_set_rate(g_inno, rate);
-	if (ret < 0) {
-		printf("inno hdmi set rate failed ret:%d\n", ret);
-		return ret;
-	}
-
-	priv->rate = g_inno->pixclock;
-
-	return priv->rate;
-}
-
 static const struct clk_ops inno_hdmi_clk_ops = {
 	.get_rate	= inno_hdmi_clk_get_rate,
 	.set_rate	= inno_hdmi_clk_set_rate,
+	.round_rate	= inno_hdmi_phy_clk_round_rate,
 };
 
 static int inno_hdmi_clk_probe(struct udevice *dev)

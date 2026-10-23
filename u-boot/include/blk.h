@@ -40,6 +40,7 @@ enum if_type {
 	IF_TYPE_SPINOR,
 	IF_TYPE_RAMDISK,
 	IF_TYPE_MTD,
+	IF_TYPE_RVD,
 	IF_TYPE_COUNT,			/* Number of interface types */
 };
 
@@ -55,6 +56,7 @@ enum if_type {
 /* define block device operation flags */
 #define BLK_PRE_RW		BIT(0)	/* Block prepare read & write*/
 #define BLK_MTD_CONT_WRITE	BIT(1)	/* Special for Nand device P/E */
+#define BLK_MTD_LOADER_MODE	BIT(2)	/* Special for Nand device bad block mapping info */
 
 /*
  * Identifies the partition table type (ie. MBR vs GPT GUID) signature

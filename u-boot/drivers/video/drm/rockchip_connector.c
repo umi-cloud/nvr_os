@@ -13,7 +13,6 @@
 #include "rockchip_display.h"
 #include "rockchip_crtc.h"
 #include "rockchip_connector.h"
-#include "rockchip_phy.h"
 
 #ifdef CONFIG_SPL_BUILD
 int rockchip_connector_bind(struct rockchip_connector *conn, struct udevice *dev, int id,
@@ -92,9 +91,6 @@ static int rockchip_connector_path_init(struct rockchip_connector *conn,
 		if (ret)
 			return ret;
 	}
-
-	if (conn->phy)
-		rockchip_phy_init(conn->phy);
 
 	return ret;
 }
@@ -176,27 +172,6 @@ int rockchip_connector_get_timing(struct display_state *state)
 		if (state->conn_state.secondary) {
 			conn = state->conn_state.secondary;
 			ret = conn->funcs->get_timing(conn, state);
-			if (ret)
-				return ret;
-		}
-	}
-
-	return ret;
-}
-
-int rockchip_connector_get_edid(struct display_state *state)
-{
-	int ret = 0;
-	struct rockchip_connector *conn;
-
-	conn = state->conn_state.connector;
-	if (conn->funcs->get_edid) {
-		ret = conn->funcs->get_edid(conn, state);
-		if (ret)
-			return ret;
-		if (state->conn_state.secondary) {
-			conn = state->conn_state.secondary;
-			ret = conn->funcs->get_edid(conn, state);
 			if (ret)
 				return ret;
 		}

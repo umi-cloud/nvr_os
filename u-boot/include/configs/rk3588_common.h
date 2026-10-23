@@ -11,7 +11,11 @@
 
 #define CONFIG_SPL_FRAMEWORK
 #define CONFIG_SPL_TEXT_BASE		0x00000000
+#ifdef CONFIG_SPL_SKIP_RELOCATE
 #define CONFIG_SPL_MAX_SIZE		0x00040000
+#else
+#define CONFIG_SPL_MAX_SIZE		0x00080000
+#endif
 #define CONFIG_SPL_BSS_START_ADDR	0x03fe0000
 #define CONFIG_SPL_BSS_MAX_SIZE		0x00010000
 #define CONFIG_SPL_STACK		0x03fe0000
@@ -49,6 +53,24 @@
 #define OTP_RSA4096_ENABLE_SIZE		1
 #define OTP_RSA_HASH_ADDR		0x9c0
 #define OTP_RSA_HASH_SIZE		32
+
+/* firmware key */
+#define OTP_FW_ENC_KEY_ADDR		(0x20 * 4)
+#define OTP_FW_ENC_KEY_SIZE		(0x08 * 4)
+
+#define OTP_OEM_KEY0_ADDR		(0x28 * 4)
+#define OTP_OEM_KEY0_SIZE		(0x08 * 4)
+
+#define OTP_OEM_KEY1_ADDR		(0x30 * 4)
+#define OTP_OEM_KEY1_SIZE		(0x08 * 4)
+
+#define OTP_OEM_KEY2_ADDR		(0x38 * 4)
+#define OTP_OEM_KEY2_SIZE		(0x08 * 4)
+
+#define OTP_OEM_KEY3_ADDR		(0x68 * 4)
+#define OTP_OEM_KEY3_SIZE		(0x08 * 4)
+
+#define CRYPTO_S_BY_KEYLAD_BASE		0xfe420000
 
 /* MMC/SD IP block */
 #define CONFIG_BOUNCE_BUFFER

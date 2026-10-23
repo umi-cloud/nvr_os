@@ -1707,7 +1707,7 @@ static void rk3576_set_to_rmii(struct gmac_rockchip_platdata *pdata)
 
 	enum {
 		RK3576_GMAC_RMII_MODE_MASK = BIT(3),
-		RK3576_GMAC_RMII_MODE = 0x1,
+		RK3576_GMAC_RMII_MODE = BIT(3),
 	};
 
 	s_grf = syscon_get_first_range(ROCKCHIP_SYSCON_SDGMAC_GRF);
@@ -2471,11 +2471,8 @@ static int gmac_rockchip_probe(struct udevice *dev)
 	case PHY_INTERFACE_MODE_RMII:
 		/* The commet is the same as RGMII mode */
 		if (!pdata->clock_input) {
-			if (clk.id) {
-				rate = clk_set_rate(&clk, 50000000);
-				if (rate != 50000000)
-					return -EINVAL;
-			}
+			if (clk.id)
+				clk_set_rate(&clk, 50000000);
 		}
 
 		/* Set to RMII mode */

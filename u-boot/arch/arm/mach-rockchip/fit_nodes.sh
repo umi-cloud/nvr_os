@@ -50,7 +50,7 @@ function gen_uboot_node()
 			arch = \"${U_ARCH}\";
 			os = \"U-Boot\";
 			compression = \"${COMPRESSION}\";
-			load = <"${UBOOT_LOAD_ADDR}">;"
+			load = ${FIT_ADDR_PREFIX}<"${UBOOT_LOAD_ADDR}">;"
 	if [ "${COMPRESSION}" != "none" ]; then
 		openssl dgst -sha256 -binary -out ${UBOOT}.digest ${UBOOT}
 		UBOOT_SZ=`ls -l ${UBOOT} | awk '{ print $5 }'`
@@ -139,7 +139,7 @@ function gen_bl31_node()
 			arch = \"${ARCH}\";
 			os = \"arm-trusted-firmware\";
 			compression = \"${COMPRESSION}\";
-			load = <"${ATF_LOAD_ADDR}">;
+			load = ${FIT_ADDR_PREFIX}<"${ATF_LOAD_ADDR}">;
 			hash {
 				algo = \"sha256\";
 			};
@@ -156,7 +156,7 @@ function gen_bl31_node()
 			arch = \"${ARCH}\";
 			os = \"arm-trusted-firmware\";
 			compression = \"none\";
-			load = <"${ATF_LOAD_ADDR}">;
+			load = ${FIT_ADDR_PREFIX}<"${ATF_LOAD_ADDR}">;
 			hash {
 				algo = \"sha256\";
 			};
@@ -200,7 +200,7 @@ function gen_bl32_node()
 			os = \"op-tee\";
 			compression = \"${COMPRESSION}\";
 			${ENTRY}
-			load = <"${TEE_LOAD_ADDR}">;"
+			load = ${FIT_ADDR_PREFIX}<"${TEE_LOAD_ADDR}">;"
 	if [ "${COMPRESSION}" != "none" ]; then
 		openssl dgst -sha256 -binary -out ${TEE}.digest ${TEE}
 		${COMPRESS_CMD} ${TEE}
@@ -244,7 +244,7 @@ function gen_mcu_node()
 			description = \"${MCU}\";
 			type = \"standalone\";
 			arch = \"riscv\";
-			load = <"${MCU_ADDR}">;"
+			load = ${FIT_ADDR_PREFIX}<"${MCU_ADDR}">;"
 
 		# When allow to be compressed?
 		# DRAM base < load addr < Periph register base
@@ -289,14 +289,14 @@ function gen_mcu_node()
 			description = \"${INIT}\";
 			type = \"standalone\";
 			arch = \"${ARCH}\";
-			load = <"${INIT0_LOAD_ADDR}">;
+			load = ${FIT_ADDR_PREFIX}<"${INIT0_LOAD_ADDR}">;
 			data = /incbin/(\"./${INIT}.bin\");
 			compression = \"none\";
 			hash {
 				algo = \"sha256\";
 			};
 		};"
-	STANDALONE_MCU="standalone = \"init0\"${STANDALONE_LIST};"
+	STANDALONE_MCU="standalone = \"init0\",${STANDALONE_LIST};"
 }
 
 function gen_loadable_node()
@@ -325,7 +325,7 @@ function gen_loadable_node()
 			description = \"${LOAD}\";
 			type = \"standalone\";
 			arch = \"${ARCH}\";
-			load = <"${LOAD_ADDR}">;"
+			load = ${FIT_ADDR_PREFIX}<"${LOAD_ADDR}">;"
 
 		# When allow to be compressed?
 		# DRAM base < load addr < Periph register base
@@ -454,4 +454,3 @@ echo "	};
 };
 "
 }
-

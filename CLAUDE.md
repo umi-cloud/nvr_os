@@ -306,8 +306,10 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   `/data/backup/nvr-os-legacy-20260908/` 的 bundle 还原,或从 Rockchip 官方重新获取
 - Rockchip 原厂 SDK 原始包(RV1126B 2025-06、RK3576 2026-06,u-boot 与部分 rkbin 的来源,不一定能再下载):
   `/data/backup/sdk/`
-- 换下来的旧内核树、烧写前的板子备份:`/data/backup/nvr-os-kernel-rkr61-20261021/`、
-  `/data/backup/nvr-os-sata-board-flash-backup-20261021/`
+- 换下来的旧内核树与旧 u-boot 树、烧写前的板子备份:`/data/backup/nvr-os-kernel-rkr61-20261021/`、
+  `/data/backup/nvr-os-uboot-rv1126bsdk-20261023/`、`/data/backup/nvr-os-sata-board-flash-backup-20261021/`
+- u-boot:Rockchip 上游 next-dev 锁定在 `1c535d65b8`(2026-07-28,2026-10-23 换入),不是 SDK 发布快照,
+  升级要单独评估并上板验证;详见 docs/nvr-customizations.md
 
 ## 分区(NVR 两块板共用 parameter-nvr.txt)
 

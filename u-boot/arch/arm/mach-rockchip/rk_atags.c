@@ -185,7 +185,7 @@ int atags_set_tag(u32 magic, void *tagdata)
 	u32 length, size = 0, hash;
 	int append = 1; /* 0: override */
 
-#if !defined(CONFIG_TPL_BUILD) && !CONFIG_IS_ENABLED(FPGA_ROCKCHIP)
+#if !defined(CONFIG_TPL_BUILD) && !CONFIG_IS_ENABLED(FPGA_ROCKCHIP) && !defined(CONFIG_MOS_SECONDARY)
 	if (!atags_is_available())
 		return -EPERM;
 #endif
@@ -263,6 +263,12 @@ int atags_set_tag(u32 magic, void *tagdata)
 		break;
 	case ATAG_FWVER:
 		size = tag_size(tag_fwver);
+		break;
+	case ATAG_MOS:
+		size = tag_size(tag_mos);
+		break;
+	case ATAG_CONSOLE:
+		size = tag_size(tag_console);
 		break;
 	};
 
@@ -420,4 +426,3 @@ void atags_destroy(void)
 	if (atags_is_available())
 		memset((char *)ATAGS_PHYS_BASE, 0, sizeof(struct tag));
 }
-

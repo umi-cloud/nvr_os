@@ -26,6 +26,8 @@
 
 #include <edid.h>
 
+struct rockchip_panel;
+
 /*
  * Unless otherwise noted, all values are from the DP 1.1a spec.  Note that
  * DP and DPCD versions are independent.  Differences from 1.0 are not noted,
@@ -371,6 +373,13 @@
 # define DP_DS_PORT_TYPE_DP_DUALMODE        5
 # define DP_DS_PORT_TYPE_WIRELESS           6
 # define DP_DS_PORT_HPD			    (1 << 3)
+# define DP_DS_NON_EDID_MASK		    (0xf << 4)
+# define DP_DS_NON_EDID_720x480i_60	    (1 << 4)
+# define DP_DS_NON_EDID_720x480i_50	    (2 << 4)
+# define DP_DS_NON_EDID_1920x1080i_60	    (3 << 4)
+# define DP_DS_NON_EDID_1920x1080i_50	    (4 << 4)
+# define DP_DS_NON_EDID_1280x720_60	    (5 << 4)
+# define DP_DS_NON_EDID_1280x720_50	    (7 << 4)
 /* offset 1 for VGA is maximum megapixels per second / 8 */
 /* offset 2 */
 # define DP_DS_MAX_BPC_MASK	            (3 << 0)
@@ -378,6 +387,17 @@
 # define DP_DS_10BPC		            1
 # define DP_DS_12BPC		            2
 # define DP_DS_16BPC		            3
+/* offset 3 for DVI */
+# define DP_DS_DVI_DUAL_LINK		    (1 << 1)
+# define DP_DS_DVI_HIGH_COLOR_DEPTH	    (1 << 2)
+/* offset 3 for HDMI */
+# define DP_DS_HDMI_FRAME_SEQ_TO_FRAME_PACK (1 << 0)
+# define DP_DS_HDMI_YCBCR422_PASS_THROUGH   (1 << 1)
+# define DP_DS_HDMI_YCBCR420_PASS_THROUGH   (1 << 2)
+# define DP_DS_HDMI_YCBCR444_TO_422_CONV    (1 << 3)
+# define DP_DS_HDMI_YCBCR444_TO_420_CONV    (1 << 4)
+
+#define DP_MAX_DOWNSTREAM_PORTS		    0x10
 
 /* DP Forward error Correction Registers */
 #define DP_FEC_CAPABILITY		    0x090    /* 1.4 */
@@ -938,6 +958,16 @@
 #define DP_CEC_TX_MESSAGE_BUFFER               0x3020
 #define DP_CEC_MESSAGE_BUFFER_LENGTH             0x10
 
+#define DP_PROTOCOL_CONVERTER_CONTROL_0		0x3050 /* DP 1.3 */
+# define DP_HDMI_DVI_OUTPUT_CONFIG		(1 << 0) /* DP 1.3 */
+#define DP_PROTOCOL_CONVERTER_CONTROL_1		0x3051 /* DP 1.3 */
+# define DP_CONVERSION_TO_YCBCR420_ENABLE	(1 << 0) /* DP 1.3 */
+# define DP_HDMI_EDID_PROCESSING_DISABLE	(1 << 1) /* DP 1.4 */
+# define DP_HDMI_AUTONOMOUS_SCRAMBLING_DISABLE	(1 << 2) /* DP 1.4 */
+# define DP_HDMI_FORCE_SCRAMBLING		(1 << 3) /* DP 1.4 */
+#define DP_PROTOCOL_CONVERTER_CONTROL_2		0x3052 /* DP 1.3 */
+# define DP_CONVERSION_TO_YCBCR422_ENABLE	(1 << 0) /* DP 1.3 */
+
 #define DP_AUX_HDCP_BKSV		0x68000
 #define DP_AUX_HDCP_RI_PRIME		0x68005
 #define DP_AUX_HDCP_AKSV		0x68007
@@ -1172,6 +1202,12 @@ drm_dp_alternate_scrambler_reset_cap(const u8 dpcd[DP_RECEIVER_CAP_SIZE])
 			DP_ALTERNATE_SCRAMBLER_RESET_CAP;
 }
 
+static inline bool
+drm_edp_backlight_supported(const u8 edp_dpcd[EDP_DISPLAY_CTL_CAP_SIZE])
+{
+	return !!(edp_dpcd[1] & DP_EDP_TCON_BACKLIGHT_ADJUSTMENT_CAP);
+}
+
 struct drm_dp_aux_msg {
 	unsigned int address;
 	u8 request;
@@ -1186,6 +1222,46 @@ struct drm_dp_aux {
 	struct udevice *dev;
 	ssize_t (*transfer)(struct drm_dp_aux *aux,
 			    struct drm_dp_aux_msg *msg);
+	/**
+	 * @wait_hpd_asserted: wait for HPD to be asserted
+	 *
+	 * This is mainly useful for eDP panels drivers to wait for an eDP
+	 * panel to finish powering on. It is optional for DP AUX controllers
+	 * to implement this function. It is required for DP AUX endpoints
+	 * (panel drivers) to call this function after powering up but before
+	 * doing AUX transfers unless the DP AUX endpoint driver knows that
+	 * we're not using the AUX controller's HPD. One example of the panel
+	 * driver not needing to call this is if HPD is hooked up to a GPIO
+	 * that the panel driver can read directly.
+	 *
+	 * If a DP AUX controller does not implement this function then it
+	 * may still support eDP panels that use the AUX controller's built-in
+	 * HPD signal by implementing a long wait for HPD in the transfer()
+	 * callback, though this is deprecated.
+	 *
+	 * This function will efficiently wait for the HPD signal to be
+	 * asserted. The `wait_us` parameter that is passed in says that we
+	 * know that the HPD signal is expected to be asserted within `wait_us`
+	 * microseconds. This function could wait for longer than `wait_us` if
+	 * the logic in the DP controller has a long debouncing time. The
+	 * important thing is that if this function returns success that the
+	 * DP controller is ready to send AUX transactions.
+	 *
+	 * This function returns 0 if HPD was asserted or -ETIMEDOUT if time
+	 * expired and HPD wasn't asserted. This function should not print
+	 * timeout errors to the log.
+	 *
+	 * The semantics of this function are designed to match the
+	 * readx_poll_timeout() function. That means a `wait_us` of 0 means
+	 * to wait forever. Like readx_poll_timeout(), this function may sleep.
+	 *
+	 * NOTE: this function specifically reports the state of the HPD pin
+	 * that's associated with the DP AUX channel. This is different from
+	 * the HPD concept in much of the rest of DRM which is more about
+	 * physical presence of a display. For eDP, for instance, a display is
+	 * assumed always present even if the HPD pin is deasserted.
+	 */
+	int (*wait_hpd_asserted)(struct drm_dp_aux *aux, unsigned long wait_us);
 	unsigned int i2c_nack_count;
 	unsigned int i2c_defer_count;
 };
@@ -1231,6 +1307,75 @@ int drm_dp_read_dpcd_caps(struct drm_dp_aux *aux,
 int drm_dp_dpcd_read_link_status(struct drm_dp_aux *aux,
 				 u8 status[DP_LINK_STATUS_SIZE]);
 
+int drm_dp_read_downstream_info(struct drm_dp_aux *aux,
+				const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+				u8 downstream_ports[DP_MAX_DOWNSTREAM_PORTS]);
+bool drm_dp_downstream_is_type(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+			       const u8 port_cap[4], u8 type);
+bool drm_dp_downstream_is_tmds(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+			       const u8 port_cap[4]);
+int drm_dp_downstream_max_dotclock(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+				   const u8 port_cap[4]);
+int drm_dp_downstream_max_tmds_clock(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+				     const u8 port_cap[4]);
+int drm_dp_downstream_min_tmds_clock(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+				     const u8 port_cap[4]);
+int drm_dp_downstream_max_bpc(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+			      const u8 port_cap[4]);
+bool drm_dp_downstream_420_passthrough(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+				       const u8 port_cap[4]);
+bool drm_dp_downstream_444_to_420_conversion(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
+					     const u8 port_cap[4]);
 int drm_dp_i2c_xfer(struct ddc_adapter *adapter, struct i2c_msg *msgs,
 		    int num);
+
+struct drm_dp_dpcd_ident {
+	u8 oui[3];
+	u8 device_id[6];
+	u8 hw_rev;
+	u8 sw_major_rev;
+	u8 sw_minor_rev;
+} __packed;
+
+struct drm_dp_desc {
+	struct drm_dp_dpcd_ident ident;
+	u32 quirks;
+};
+
+int drm_dp_read_desc(struct drm_dp_aux *aux, struct drm_dp_desc *desc,
+		     bool is_branch);
+
+/**
+ * struct drm_edp_backlight_info - Probed eDP backlight info struct
+ * @pwmgen_bit_count: The pwmgen bit count
+ * @pwm_freq_pre_divider: The PWM frequency pre-divider value being used for this backlight, if any
+ * @max: The maximum backlight level that may be set
+ * @lsb_reg_used: Do we also write values to the DP_EDP_BACKLIGHT_BRIGHTNESS_LSB register?
+ * @aux_enable: Does the panel support the AUX enable cap?
+ * @aux_set: Does the panel support setting the brightness through AUX?
+ *
+ * This structure contains various data about an eDP backlight, which can be populated by using
+ * drm_edp_backlight_init().
+ */
+struct drm_edp_backlight_info {
+	u8 pwmgen_bit_count;
+	u8 pwm_freq_pre_divider;
+	u16 max;
+
+	bool lsb_reg_used : 1;
+	bool aux_enable : 1;
+	bool aux_set : 1;
+};
+
+int
+drm_edp_backlight_init(struct drm_dp_aux *aux, struct drm_edp_backlight_info *bl,
+		       u16 driver_pwm_freq_hz, const u8 edp_dpcd[EDP_DISPLAY_CTL_CAP_SIZE],
+		       u16 *current_level, u8 *current_mode);
+int drm_edp_backlight_set_level(struct drm_dp_aux *aux, const struct drm_edp_backlight_info *bl,
+				u16 level);
+int drm_edp_backlight_enable(struct drm_dp_aux *aux, const struct drm_edp_backlight_info *bl,
+			     u16 level);
+int drm_edp_backlight_disable(struct drm_dp_aux *aux, const struct drm_edp_backlight_info *bl);
+int drm_panel_dp_aux_backlight(struct rockchip_panel *panel, struct drm_dp_aux *aux);
+
 #endif /* _DRM_DP_HELPER_H_ */

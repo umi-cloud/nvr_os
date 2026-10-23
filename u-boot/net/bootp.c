@@ -350,6 +350,14 @@ static void bootp_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 	debug("got BOOTP packet (src=%d, dst=%d, len=%d want_len=%zu)\n",
 	      src, dest, len, sizeof(struct bootp_hdr));
 
+	/* Check the minimum size of a BOOTP packet is respected.
+	 * A BOOTP packet is between 300 bytes and 576 bytes big
+	 */
+	if (len < offsetof(struct bootp_hdr, bp_vend) + 64) {
+		printf("Error: got an invalid BOOTP packet (len=%u)\n", len);
+		return;
+	}
+
 	bp = (struct bootp_hdr *)pkt;
 
 	/* Filter out pkts we don't want */
@@ -367,7 +375,8 @@ static void bootp_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 
 	/* Retrieve extended information (we must parse the vendor area) */
 	if (net_read_u32((u32 *)&bp->bp_vend[0]) == htonl(BOOTP_VENDOR_MAGIC))
-		bootp_process_vendor((uchar *)&bp->bp_vend[4], len);
+		bootp_process_vendor((uchar *)&bp->bp_vend[4], len -
+				     (offsetof(struct bootp_hdr, bp_vend) + 4));
 
 	net_set_timeout_handler(0, (thand_f *)0);
 	bootstage_mark_name(BOOTSTAGE_ID_BOOTP_STOP, "bootp_stop");
@@ -930,13 +939,13 @@ static void dhcp_packet_process_options(struct bootp_hdr *bp)
 	}
 }
 
-static int dhcp_message_type(unsigned char *popt)
+static int dhcp_message_type(unsigned char *popt, unsigned char *end)
 {
 	if (net_read_u32((u32 *)popt) != htonl(BOOTP_VENDOR_MAGIC))
 		return -1;
 
 	popt += 4;
-	while (*popt != 0xff) {
+	while (popt < end && *popt != 0xff) {
 		if (*popt == 53)	/* DHCP Message Type */
 			return *(popt + 2);
 		if (*popt == 0)	{
@@ -1068,7 +1077,7 @@ static void dhcp_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 	case REQUESTING:
 		debug("DHCP State: REQUESTING\n");
 
-		if (dhcp_message_type((u8 *)bp->bp_vend) == DHCP_ACK) {
+		if (dhcp_message_type((u8 *)bp->bp_vend, (u8 *)pkt + len) == DHCP_ACK) {
 			dhcp_packet_process_options(bp);
 			/* Store net params from reply */
 			store_net_params(bp);

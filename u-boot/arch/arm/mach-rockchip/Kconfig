@@ -602,6 +602,7 @@ config ROCKCHIP_RV1103B
 	select ROCKCHIP_BROM_HELPER
 	select DEBUG_UART_BOARD_INIT
 	select ARM_ERRATA_814220
+	imply ARM_SMCCC
 	imply SUPPORT_SPL
 	imply SUPPORT_TPL
 	imply SPL
@@ -630,8 +631,10 @@ endif
 config ROCKCHIP_RV1106
 	bool "Support Rockchip RV1106"
 	select CPU_V7
+	select ARM_ZERO_CNTVOFF
 	select DEBUG_UART_BOARD_INIT
 	select ARM_ERRATA_814220
+	imply ARM_SMCCC
 	imply SUPPORT_SPL
 	imply SUPPORT_TPL
 	imply SPL
@@ -791,7 +794,7 @@ config ROCKCHIP_BOOT_MODE_REG
 	default 0xff1005c8 if ROCKCHIP_RK3328
 	default 0xff738200 if ROCKCHIP_RK3368
 	default 0xff320300 if ROCKCHIP_RK3399
-	default 0xff910200 if ROCKCHIP_RK3506
+	default 0xff910220 if ROCKCHIP_RK3506
 	default 0xff370200 if ROCKCHIP_RK3528
 	default 0xff010220 if ROCKCHIP_RK3562
 	default 0xfdc20200 if ROCKCHIP_RK3568
@@ -938,6 +941,14 @@ config ROCKCHIP_RESOURCE_IMAGE
 	  This enables support to get dtb or logo files from
 	  rockchip resource image format partition.
 
+config SPL_ROCKCHIP_RESOURCE_IMAGE
+	bool "Enable support for rockchip resource image in SPL"
+	depends on SPL
+	default y if SPL_KERNEL_BOOT
+	help
+	  This enables support to get dtb or logo files from
+	  rockchip resource image format partition in SPL.
+
 config ROCKCHIP_DTB_VERIFY
 	bool "Enable hash verify for DTB in the resource file"
 	depends on ROCKCHIP_RESOURCE_IMAGE
@@ -1009,6 +1020,13 @@ config ROCKCHIP_VENDOR_PARTITION
 	help
 	  This enable support to read/write vendor configuration data from/to
 	  this partition.
+
+config SPL_ROCKCHIP_VENDOR_PARTITION
+	bool "Rockchip vendor storage partition support in SPL"
+	depends on SPL
+	help
+	  This enable support to read/write vendor configuration data from/to
+	  this partition in SPL.
 
 config USING_KERNEL_DTB
 	bool "Using dtb from Kernel/resource for U-Boot"
@@ -1174,6 +1192,12 @@ config ROCKCHIP_SFC_IOMUX
 	default n
 	help
 	  This enable U-Boot to config SFC iomux.
+
+config ROCKCHIP_SDMMC_IOMUX
+	bool "ROCKCHIP SDMMC IOMUX"
+	default n
+	help
+	  This enable U-Boot to config SDMMC iomux.
 
 config ROCKCHIP_SET_SN
 	bool "Rockchip set serial number"

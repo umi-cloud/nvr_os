@@ -33,13 +33,15 @@ DECLARE_GLOBAL_DATA_PTR;
 
 /* GRF */
 #define SYS_GRF_BASE			0x20100000
+#define HPMCU_CACHE_MISC		0x18
 #define TSADC_GRF_CON0			0x50
 #define TSADC_GRF_CON1			0x54
+#define TSADC_GRF_CON4			0x60
 #define TSADC_GRF_CON6			0x68
 #define TSADC_GRF_ST1			0x114
 #define TSADC_DEF_WIDTH			0x00010001
 #define TSADC_TARGET_WIDTH		24000
-#define TSADC_DEF_BIAS			32
+#define TSADC_DEF_BIAS			0x7f
 #define TSADC_MIN_BIAS			0x1
 #define TSADC_MAX_BIAS			0x7f
 #define TSADC_UNLOCK_VALUE		0xa5
@@ -130,17 +132,26 @@ DECLARE_GLOBAL_DATA_PTR;
 #define PVTPLL_GCK_CFG			0x20
 #define PVTPLL_GCK_LEN			0x24
 
+/*
+ * If need less wait time, please measure required
+ * power down time on actual hardware.
+ */
+#define SDMMC_PWR_DOWN_MS		50
+
 #ifdef CONFIG_ARM64
 #include <asm/armv8/mmu.h>
 
 static struct mm_region rv1126b_mem_map[] = {
+#ifndef CONFIG_SPL_BUILD
 	{
 		.virt = 0x00010000UL,
 		.phys = 0x00010000UL,
 		.size = 0x0fff0000UL,
 		.attrs = PTE_BLOCK_MEMTYPE(MT_NORMAL) |
 			 PTE_BLOCK_INNER_SHARE
-	}, {
+	},
+#endif
+	{
 		.virt = 0x20000000UL,
 		.phys = 0x20000000UL,
 		.size = 0x02800000UL,
@@ -190,10 +201,10 @@ void board_set_iomux(enum if_type if_type, int devnum, int routing)
 			writel(0x00f00000, PMUIO0_IOC_BASE + GPIO0A_IOMUX_SEL_H);
 			writel(0x0fff0aaa, VCCIO2_IOC_BASE + GPIO2A_PULL);
 
-			/* SDMMC PWREN GPIO0A4 power down and power up */
+			/* SDMMC PWREN GPIO0B0 power down and power up */
 			writel(0x01000100, GPIO0_BASE + GPIO_SWPORT_DR_L);
 			writel(0x01000100, GPIO0_BASE + GPIO_SWPORT_DDR_L);
-			mdelay(50);
+			mdelay(SDMMC_PWR_DOWN_MS);
 			writel(0x01000000, GPIO0_BASE + GPIO_SWPORT_DR_L);
 #endif
 			/* set SDMMC D0-3/CMD/CLK and pull up */
@@ -214,7 +225,6 @@ void board_set_iomux(enum if_type if_type, int devnum, int routing)
 			/* FSPI0 M0 */
 			writel(0x0f0f0101, VCCIO1_IOC_BASE + GPIO1B_IOMUX_SEL_L);
 			writel(0xffff1111, VCCIO1_IOC_BASE + GPIO1B_IOMUX_SEL_H);
-			writel(0x00f00020, VCCIO1_IOC_BASE + GPIO1A_IOMUX_SEL_H);
 		} else if (routing == 1) {
 			/* FSPI1 M0 */
 			writel(0x0fff0111, PMUIO0_IOC_BASE + GPIO0B_IOMUX_SEL_L);
@@ -294,7 +304,7 @@ void rockchip_stimer_init(void)
 	writel(0x00010001, CONFIG_ROCKCHIP_STIMER_BASE + 0x04);
 }
 
-void spl_board_storages_fixup(struct spl_image_loader *loader)
+void spl_board_storages_finish(struct spl_image_loader *loader)
 {
 	if (!loader)
 		return;
@@ -304,9 +314,55 @@ void spl_board_storages_fixup(struct spl_image_loader *loader)
 		board_unset_iomux(IF_TYPE_MMC, 1, 0);
 }
 
+static void tsadc_trigger(void)
+{
+	writel(TSADC_UNLOCK_VALUE | TSADC_UNLOCK_VALUE_MASK,
+	       SYS_GRF_BASE + TSADC_GRF_CON1);
+	writel(TSADC_UNLOCK_TRIGGER | TSADC_UNLOCK_TRIGGER_MASK,
+	       SYS_GRF_BASE + TSADC_GRF_CON1);
+	writel(TSADC_UNLOCK_TRIGGER_MASK, SYS_GRF_BASE + TSADC_GRF_CON1);
+}
+
 static void tsadc_adjust_bias_current(void)
 {
+	struct udevice *dev;
+	int8_t offset_otp = 0;
+	uint8_t bias_otp = 0;
+	int16_t offset = 0;
 	u32 bias, value = 0, width = 0;
+	int ret = 0;
+
+	ret = uclass_get_device_by_driver(UCLASS_MISC,
+					  DM_GET_DRIVER(rockchip_otp), &dev);
+	if (ret) {
+		printf("failed to get otp device for tsadc\n");
+	} else {
+		if (misc_read(dev, 0x72, &bias_otp, 1))
+			printf("failed to get otp tsadc bias\n");
+		if (misc_read(dev, 0x73, (uint8_t *)&offset_otp, 1))
+			printf("failed to get otp tsadc offset\n");
+
+		if (offset_otp) {
+			offset = (int16_t)offset_otp * 10;
+			offset = 0x963f - offset;
+			writel((uint32_t)offset | 0xffff0000,
+			       SYS_GRF_BASE + TSADC_GRF_CON4);
+			tsadc_trigger();
+		}
+		printf("tsadc otp bias=0x%x offset=0x%x, grf offset=0x%x\n",
+		       bias_otp, (uint8_t)offset_otp, (uint16_t)offset);
+
+		if (bias_otp) {
+			if (bias_otp > TSADC_MAX_BIAS)
+				bias_otp = TSADC_MAX_BIAS;
+			if (bias_otp < TSADC_MIN_BIAS)
+				bias_otp = TSADC_MIN_BIAS;
+			writel((TSADC_MAX_BIAS << 16) | bias_otp,
+			       SYS_GRF_BASE + TSADC_GRF_CON6);
+			tsadc_trigger();
+			return;
+		}
+	}
 
 	value = readl(SYS_GRF_BASE + TSADC_GRF_ST1);
 	if (!value || value == TSADC_DEF_WIDTH) {
@@ -318,14 +374,12 @@ static void tsadc_adjust_bias_current(void)
 			bias = TSADC_MAX_BIAS;
 		if (bias < TSADC_MIN_BIAS)
 			bias = TSADC_MIN_BIAS;
-		printf("tsadc width=0x%x, bias=0x%x\n", value, bias);
+		printf("tsadc width=0x%x %u lo=%u hi=%u, bias=0x%x\n",
+		       value, ((value & 0xffff0000) >> 16) + (value & 0xffff),
+		       value & 0xffff, (value & 0xffff0000) >> 16, bias);
 		writel((TSADC_MAX_BIAS << 16) | bias,
 		       SYS_GRF_BASE + TSADC_GRF_CON6);
-		writel(TSADC_UNLOCK_VALUE | TSADC_UNLOCK_VALUE_MASK,
-		       SYS_GRF_BASE + TSADC_GRF_CON1);
-		writel(TSADC_UNLOCK_TRIGGER | TSADC_UNLOCK_TRIGGER_MASK,
-		       SYS_GRF_BASE + TSADC_GRF_CON1);
-		writel(TSADC_UNLOCK_TRIGGER_MASK, SYS_GRF_BASE + TSADC_GRF_CON1);
+		tsadc_trigger();
 	}
 }
 
@@ -350,6 +404,13 @@ int spl_fit_standalone_release(char *id, uintptr_t entry_point)
 
 	return 0;
 }
+
+#ifdef CONFIG_ROCKCHIP_META
+void rk_meta_process(void)
+{
+	writel(0x00080008, SYS_GRF_BASE + HPMCU_CACHE_MISC);
+}
+#endif
 #endif
 
 #ifndef CONFIG_TPL_BUILD
@@ -396,6 +457,7 @@ int arch_cpu_init(void)
 	/* Enable tsadc phy */
 	writel(0x01000000, CRU_BUS_BASE + CRU_BUS_GATE_CON06);
 	writel(0x80788028, SYS_GRF_BASE + TSADC_GRF_CON0);
+	writel(0x007f007f, SYS_GRF_BASE + TSADC_GRF_CON6);
 	writel(0x00ff00a5, SYS_GRF_BASE + TSADC_GRF_CON1);
 	writel(0x01000100, SYS_GRF_BASE + TSADC_GRF_CON1);
 	writel(0x01000000, SYS_GRF_BASE + TSADC_GRF_CON1);
@@ -406,7 +468,7 @@ int arch_cpu_init(void)
 	writel(0x00700070, VI_GRF_BASE + SARADC2_GRF_CON0);
 
 	/* FEPHY: disable gpio's smt and ie, keep high-z to save power consumption */
-	writel(0x00f00000, VCCIO6_IOC_BASE + GPIO6C_PULL);
+	writel(0xff000000, VCCIO6_IOC_BASE + GPIO6C_PULL);
 	writel(0x00f00000, VCCIO6_IOC_BASE + GPIO6C_IE);
 	writel(0x00f00000, VCCIO6_IOC_BASE + GPIO6C_SMT);
 
@@ -426,13 +488,13 @@ int arch_cpu_init(void)
 #elif defined(CONFIG_ROCKCHIP_SFC_IOMUX)
 	/*
 	 * (IF_TYPE_MTD, 0, 0) FSPI0
-	 * (IF_TYPE_MTD, 1, 0) FSPI1 M0
-	 * (IF_TYPE_MTD, 2, 0) FSPI1 M1
+	 * (IF_TYPE_MTD, 0, 1) FSPI1 M0
+	 * (IF_TYPE_MTD, 0, 2) FSPI1 M1
 	 */
 	board_set_iomux(IF_TYPE_MTD, 0, 0);
-#endif /* CONFIG_ROCKCHIP_EMMC_IOMUX */
+#endif
 
-#if defined(CONFIG_MMC_DW_ROCKCHIP)
+#if defined(CONFIG_ROCKCHIP_SDMMC_IOMUX)
 	/* Set the sdmmc iomux and power cycle */
 	board_set_iomux(IF_TYPE_MMC, 1, 0);
 #endif
@@ -457,11 +519,12 @@ int arch_cpu_init(void)
 }
 
 #if defined(CONFIG_ROCKCHIP_PRELOADER_ATAGS)
-#if !defined(CONFIG_SPL_BUILD) || defined(CONFIG_SPL_KERNEL_BOOT)
+#if defined(CONFIG_SPL_KERNEL_BOOT)
 int rk_board_fit_image_post_process(void *fit, int node, ulong *load_addr,
 				     ulong **src_addr, size_t *src_len)
 {
 	struct tag *t;
+	uint8_t image_arch;
 	int count;
 
 	/* Only current node is kernel needs go further. */
@@ -475,37 +538,32 @@ int rk_board_fit_image_post_process(void *fit, int node, ulong *load_addr,
 
 	if (t->u.ddr_mem.bank[0] == 0x0) {
 		/*
-		 * Change kernel load address for more ddr usable space.
-		 * For 32 bits kernel Image: 0x00018000
-		 * For 64 bits kernel Image: 0x00200000
-		 * For kernel zImage: still 0x45480000
+		 * Dynamically create memory mapping for 0x10000-0x10000000(256M)
+		 * only when needed. This avoids too much boot time without 4G DDR support.
 		 */
-#ifdef CONFIG_CMD_BOOTZ
-		ulong start, end;
+		mmu_set_region_dcache_behaviour(0x10000,
+						0x10000000 - 0x10000,
+						DCACHE_WRITEBACK);
 
-		if (bootz_setup((ulong)*src_addr, &start, &end))
-#endif
-		{
-			uint8_t image_arch;
+		if (fit_image_get_arch(fit, node, &image_arch))
+			return -EINVAL;
 
-			if (fit_image_get_arch(fit, node, &image_arch))
-				return -EINVAL;
-
-			if (image_arch == IH_ARCH_ARM) {
-				*load_addr = 0x00018000;
-			} else if (image_arch == IH_ARCH_ARM64) {
-				*load_addr = 0x00200000;
-			} else {
-				printf("Unknown image arch: 0x%x\n", image_arch);
-				return -EINVAL;
-			}
-			printf("Relocate kernel to 0x%lx.\n", *load_addr);
+		if (image_arch == IH_ARCH_ARM) {
+			*load_addr = KERNEL_ADDR1_AARCH32_R;
+		} else if (image_arch == IH_ARCH_ARM64) {
+			*load_addr = KERNEL_ADDR1_R;
+		} else {
+			printf("Unknown image arch: 0x%x\n", image_arch);
+			return -EINVAL;
 		}
+		printf("Relocate kernel to 0x%lx.\n", *load_addr);
 	}
 
 	return 0;
 }
+#endif
 
+#if defined(CONFIG_SPL_KERNEL_BOOT) || !defined(CONFIG_SPL_BUILD)
 void board_bidram_fixup(void)
 {
 	struct memblock *mem;
@@ -544,7 +602,7 @@ void board_bidram_fixup(void)
 
 	/* Remap DSMC_MEM to DDR. */
 	noffset = fdt_path_offset(gd->fdt_blob, "/dsmc@21ca0000");
-	if ((noffset >= 0) && fdtdec_get_is_enabled(gd->fdt_blob, noffset)) {
+	if ((noffset < 0) || !fdtdec_get_is_enabled(gd->fdt_blob, noffset)) {
 #ifdef CONFIG_SPL_BUILD
 		writel(0x08000800, SGRF_PMU_BASE + SGRF_PMU_SOC_CON1);
 #elif CONFIG_ROCKCHIP_SMCCC
@@ -561,7 +619,10 @@ void board_bidram_fixup(void)
 		gd->bd->bi_dram[num].size  = 0x01800000;
 		num++;
 
-		/* Remap FSPI_PMU_XIP to DDR. */
+		/*
+		 * Remap FSPI_PMU_XIP to DDR.
+		 * Because FSPI_PMU_XIP is not used now, there is no need to make a judgment here.
+		 */
 #ifdef CONFIG_SPL_BUILD
 		writel(0x20002000, SGRF_PMU_BASE + SGRF_PMU_SOC_CON1);
 #elif CONFIG_ROCKCHIP_SMCCC
@@ -576,7 +637,10 @@ void board_bidram_fixup(void)
 		gd->bd->bi_dram[num].size  = 0x02000000;
 		num++;
 
-		/* Remap FSPI_XIP to DDR. */
+		/*
+		 * Remap FSPI_XIP to DDR.
+		 * Because FSPI_XIP is not used now, there is no need to make a judgment here.
+		 */
 #ifdef CONFIG_SPL_BUILD
 		writel(0x10001000, SGRF_PMU_BASE + SGRF_PMU_SOC_CON1);
 #elif CONFIG_ROCKCHIP_SMCCC
@@ -638,6 +702,13 @@ void spl_fdt_fixup_memory(struct spl_image_info *spl_image)
 	for (i = 0, count = 0; i < CONFIG_NR_DRAM_BANKS; i++) {
 		start[i] = gd->bd->bi_dram[i].start;
 		size[i] = gd->bd->bi_dram[i].size;
+#ifdef SPL_RESV_MEM_SIZE
+		if ((start[i] == CONFIG_SYS_SDRAM_BASE) &&
+		    (start[i] + size[i] > CONFIG_SYS_SDRAM_BASE + SPL_RESV_MEM_SIZE)) {
+			start[i] += SPL_RESV_MEM_SIZE;
+			size[i] -= SPL_RESV_MEM_SIZE;
+		}
+#endif
 		if (size[i] == 0)
 			continue;
 		debug("Adding bank: 0x%08llx - 0x%08llx (size: 0x%08llx)\n",
@@ -672,6 +743,28 @@ u64 board_bidram_append_size(void)
 	return 0;
 }
 
+bool rk_board_req_mem_layout1(void)
+{
+	/*
+	 * 1. If atags first dram bank addr != 0 (0~1G is not available),
+	 *    use ENV_MEM_LAYOUT_SETTINGS, all Image run at 1G+ space.
+	 * 2. If atags first dram bank addr == 0 (max 4G size and 0~1G is available)
+	 *    use ENV_MEM_LAYOUT_SETTINGS1, uboot and atf run at 1G+,
+	 *    while kernel and ramdisk run at 0-1G.
+	 */
+	struct tag *t;
+	int count;
+
+	t = atags_get_tag(ATAG_DDR_MEM);
+	count = t->u.ddr_mem.count;
+	if (!t || !count)
+		return false;
+
+	if (t->u.ddr_mem.bank[0] == 0x0)
+		return true;
+	else
+		return false;
+}
 #endif
 #endif
 #endif

@@ -12,7 +12,9 @@
 
 DECLARE_GLOBAL_DATA_PTR;
 
-#define SZ_4GB				0x100000000ULL
+#ifndef RAM_TOP
+#define RAM_TOP				0x100000000ULL	/* default 4GB */
+#endif
 
 #ifndef CONFIG_SPL_BUILD
 #define SDRAM_OFFSET(offset)		(CONFIG_SYS_SDRAM_BASE + (offset))
@@ -72,6 +74,7 @@ struct memblock param_parse_atf_mem(void)
 	if (t && t->u.atf_mem.size) {
 		mem.base = t->u.atf_mem.phy_addr;
 		mem.size = t->u.atf_mem.size;
+#ifndef CONFIG_MOS_SUPPORT
 		/* Sanity */
 		if (mem.base + mem.size > SDRAM_OFFSET(SZ_1M)) {
 			printf("%s: ATF reserved region is not within 0-1MB "
@@ -79,6 +82,7 @@ struct memblock param_parse_atf_mem(void)
 			       __func__, (u64)mem.base, (u64)mem.base + mem.size);
 			return mem;
 		}
+#endif
 	}
 #endif
 
@@ -164,21 +168,34 @@ struct memblock param_parse_common_resv_mem(void)
 	return mem;
 }
 
-int param_parse_assign_bootdev(char **devtype, char **devnum)
+int param_parse_assign_bootdev(char **devtype, char **devnum, char **routing)
 {
 	char *bootdev_str = CONFIG_ROCKCHIP_BOOTDEV;
-	char *type, *num;
-
-	num = strchr(bootdev_str, ' ');
-	if (!num)
-		return -ENODEV;
+	char *type, *num, *route;
 
 	type = strdup(bootdev_str);
-	type[num - bootdev_str] = 0;
-	num++;
+	if (!type)
+		return -ENOMEM;
+
+	num = strchr(type, ' ');
+	if (!num) {
+		free(type);
+		return -ENODEV;
+	}
+
+	*num++ = '\0';
+	route = strchr(num, ' ');
+	if (route) {
+		*route++ = '\0';
+		if (!*route)
+			route = "0";
+	} else {
+		route = "0";
+	}
 
 	*devtype = type;
 	*devnum = num;
+	*routing = route;
 
 	return 0;
 }
@@ -235,7 +252,7 @@ int param_parse_atags_bootdev(char **devtype, char **devnum)
 			*devnum = "1";
 			break;
 #endif
-#ifdef CONFIG_DM_RAMDISK
+#if defined(CONFIG_DM_RAMDISK) || defined(CONFIG_RAMDISK)
 		case BOOT_TYPE_RAM:
 			*devtype = "ramdisk";
 			*devnum = "0";
@@ -321,14 +338,18 @@ struct memblock *param_parse_ddr_mem(int *out_count)
 			base = t->u.ddr_mem.bank[i];
 			size = t->u.ddr_mem.bank[i + count];
 
+#ifdef CONFIG_MOS_SECONDARY
+			mem[n].base = base;
+			mem[n].size = size;
+#else
 			/* 0~4GB */
-			if (base < SZ_4GB) {
+			if (base < RAM_TOP) {
 				mem[n].base = base;
 				mem[n].size = ddr_mem_get_usable_size(base, size);
-				if (base + size > SZ_4GB) {
+				if (base + size > RAM_TOP) {
 					n++;
-					mem[n].base_u64 = SZ_4GB;
-					mem[n].size_u64 = base + size - SZ_4GB;
+					mem[n].base_u64 = RAM_TOP;
+					mem[n].size_u64 = base + size - RAM_TOP;
 				}
 			} else {
 				/* 4GB+ */
@@ -336,6 +357,7 @@ struct memblock *param_parse_ddr_mem(int *out_count)
 				mem[n].size_u64 = size;
 			}
 
+#endif
 			assert(n < count + MEM_RESV_COUNT);
 		}
 
@@ -375,14 +397,15 @@ struct memblock *param_parse_ddr_mem(int *out_count)
 	return mem;
 }
 
-#ifndef CONFIG_BIDRAM
+#if !CONFIG_IS_ENABLED(BIDRAM)
 /*
- * init_bank=0: called from dram_init_banksize()
  * init_bank=0: called from dram_init()
+ * init_bank=1: called from dram_init_banksize()
  */
 phys_size_t param_simple_parse_ddr_mem(int init_bank)
 {
 	struct memblock *list;
+	phys_size_t mem_size;
 	int i, count;
 
 	list = param_parse_ddr_mem(&count);
@@ -397,8 +420,16 @@ phys_size_t param_simple_parse_ddr_mem(int init_bank)
 	}
 
 	if (!init_bank) {
-		i = count - 1;
-		return ddr_mem_get_usable_size(list[i].base, list[i].size);
+		/*
+		 * If base + size > SZ_4G, param_parse_ddr_mem() will use 'base_u64'
+		 * and 'size_u64' to record mem above 4G, and base and size will be
+		 * zero for this bank. So keep detect until mem_size is not zero.
+		 */
+		for (i = count - 1; i >= 0; i--) {
+			mem_size = ddr_mem_get_usable_size(list[i].base, list[i].size);
+			if (mem_size)
+				return mem_size;
+		}
 	}
 
 	for (i = 0; i < count; i++) {
@@ -430,10 +461,15 @@ int param_parse_pre_serial(int *flags)
 		gd->serial.id = t->u.serial.id;
 		gd->baudrate = CONFIG_BAUDRATE;
 		if (!gd->serial.enable && flags)
+			/*
+			 * The flags in gd have not been updated yet,
+			 * at this time nothing should be printed.
+			 */
 			*flags |= GD_FLG_DISABLE_CONSOLE;
-		debug("preloader: enable=%d, addr=0x%lx, baudrate=%d, id=%d\n",
-		      gd->serial.enable, gd->serial.addr,
-		      gd->serial.baudrate, gd->serial.id);
+		else
+			debug("preloader: enable=%d, addr=0x%lx, baudrate=%d, id=%d\n",
+				gd->serial.enable, gd->serial.addr,
+				gd->serial.baudrate, gd->serial.id);
 	} else
 #endif
 	{

@@ -120,15 +120,48 @@ void rockchip_stimer_init(void)
 	writel(0x00010001, CONFIG_ROCKCHIP_STIMER_BASE + 0x4);
 }
 
-void spl_board_storages_fixup(struct spl_image_loader *loader)
+void spl_board_storages_prepare(struct spl_image_loader *loader)
 {
 	if (!loader)
 		return;
 
+#if defined(CONFIG_SPL_MMC_SUPPORT)
 	/* Only have one mmc controller. */
-	if (loader->boot_device == BOOT_DEVICE_MMC1)
-		/* Unset the sdmmc0 iomux */
+	if (loader->boot_device == BOOT_DEVICE_MMC1) {
+		board_set_iomux(IF_TYPE_MMC, 0, 0);
+		return;
+	}
+#endif
+
+#if defined(CONFIG_SPL_MTD_SUPPORT)
+	if (loader->boot_device >= BOOT_DEVICE_MTD_BLK_NAND &&
+	    loader->boot_device <= BOOT_DEVICE_MTD_BLK_SPI_NOR) {
+		board_set_iomux(IF_TYPE_MTD, 0, 0);
+		return;
+	}
+#endif
+}
+
+void spl_board_storages_finish(struct spl_image_loader *loader)
+{
+	if (!loader)
+		return;
+
+#if defined(CONFIG_SPL_MMC_SUPPORT)
+	/* Only have one mmc controller. */
+	if (loader->boot_device == BOOT_DEVICE_MMC1) {
 		board_unset_iomux(IF_TYPE_MMC, 0, 0);
+		return;
+	}
+#endif
+
+#if defined(CONFIG_SPL_MTD_SUPPORT)
+	if (loader->boot_device >= BOOT_DEVICE_MTD_BLK_NAND &&
+	    loader->boot_device <= BOOT_DEVICE_MTD_BLK_SPI_NOR) {
+		board_unset_iomux(IF_TYPE_MTD, 0, 0);
+		return;
+	}
+#endif
 }
 #endif
 
@@ -141,16 +174,9 @@ int arch_cpu_init(void)
 	val = readl(FIREWALL_DDR_BASE + FW_DDR_MST1_REG);
 	writel(val & 0xffff00ff, FIREWALL_DDR_BASE + FW_DDR_MST1_REG);
 
-#if defined(CONFIG_MMC_DW_ROCKCHIP)
-	/* Set the sdmmc/emmc iomux */
-	board_set_iomux(IF_TYPE_MMC, 0, 0);
-#endif
 	/* Set the fspi to access ddr memory */
 	val = readl(FIREWALL_DDR_BASE + FW_DDR_MST1_REG);
 	writel(val & 0xff00ffff, FIREWALL_DDR_BASE + FW_DDR_MST1_REG);
-
-	/* Set the fspi iomux */
-	board_set_iomux(IF_TYPE_MTD, 0, 0);
 
 	/*
 	 * Wdt0 and WDT1 trigger global reset enable.
@@ -187,6 +213,9 @@ int arch_cpu_init(void)
 
 int fit_standalone_release(char *id, uintptr_t entry_point)
 {
+	/* m0 reset disable: PMU->PMU_INT_MASK_CON mcu_rst_dis_cfg=0,glb_int_mask_mcu=0 */
+	writel(0x00060000, 0xff90000c);
+
 	/* address map: map 0 to sram, enable TCM mode for sram
 	 * 0xfff84000 for sram
 	 * 0x03e00000 for ddr */

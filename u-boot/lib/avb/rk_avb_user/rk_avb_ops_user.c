@@ -95,7 +95,7 @@ int rk_avb_write_permanent_attributes(uint8_t *attributes, uint32_t size)
 #endif
 }
 
-int rk_avb_read_flash_lock_state(uint8_t *flash_lock_state)
+AvbIOResult rk_avb_read_flash_lock_state(uint8_t *flash_lock_state)
 {
 #ifdef CONFIG_OPTEE_CLIENT
 	int ret;
@@ -103,19 +103,25 @@ int rk_avb_read_flash_lock_state(uint8_t *flash_lock_state)
 	ret = trusty_read_flash_lock_state(flash_lock_state);
 	switch (ret) {
 	case TEE_SUCCESS:
+		ret = AVB_IO_RESULT_OK;
 		break;
 	case TEE_ERROR_GENERIC:
 	case TEE_ERROR_NO_DATA:
 	case TEE_ERROR_ITEM_NOT_FOUND:
 		*flash_lock_state = 1;
-		if (trusty_write_flash_lock_state(*flash_lock_state)) {
-			printf("trusty_write_flash_lock_state error!");
-			ret = -1;
+		if (rk_avb_write_flash_lock_state(*flash_lock_state)) {
+			printf("rk_avb_write_flash_lock_state error!");
+			ret = AVB_IO_RESULT_ERROR_IO;
 		} else {
 			ret = trusty_read_flash_lock_state(flash_lock_state);
+			if (ret == 0)
+				ret = AVB_IO_RESULT_OK;
+			else
+				ret = AVB_IO_RESULT_ERROR_IO;
 		}
 		break;
 	default:
+		ret = AVB_IO_RESULT_ERROR_IO;
 		printf("%s: trusty_read_flash_lock_state failed\n", __FILE__);
 	}
 
@@ -123,39 +129,39 @@ int rk_avb_read_flash_lock_state(uint8_t *flash_lock_state)
 #else
 	*flash_lock_state = 1;
 
-	return 0;
+	return AVB_IO_RESULT_OK;
 #endif
 }
 
-int rk_avb_write_flash_lock_state(uint8_t flash_lock_state)
+AvbIOResult rk_avb_write_flash_lock_state(uint8_t flash_lock_state)
 {
 #ifdef CONFIG_OPTEE_CLIENT
 	if (trusty_write_flash_lock_state(flash_lock_state)) {
 		printf("trusty_write_flash_lock_state error!\n");
-		return -1;
+		return AVB_IO_RESULT_ERROR_IO;
 	}
 
-	return 0;
+	return AVB_IO_RESULT_OK;
 #else
-	return -1;
+	return AVB_IO_RESULT_ERROR_IO;
 #endif
 }
 
-int rk_avb_write_lock_state(uint8_t lock_state)
+AvbIOResult rk_avb_write_lock_state(uint8_t lock_state)
 {
 #ifdef CONFIG_OPTEE_CLIENT
 	if (trusty_write_lock_state(lock_state)) {
 		printf("trusty_write_lock_state error!\n");
-		return -1;
+		return AVB_IO_RESULT_ERROR_IO;
 	}
 
-	return 0;
+	return AVB_IO_RESULT_OK;
 #else
-	return -1;
+	return AVB_IO_RESULT_ERROR_IO;
 #endif
 }
 
-int rk_avb_read_lock_state(uint8_t *lock_state)
+AvbIOResult rk_avb_read_lock_state(uint8_t *lock_state)
 {
 #ifdef CONFIG_OPTEE_CLIENT
 	uint8_t vboot_flag = 0;
@@ -164,13 +170,14 @@ int rk_avb_read_lock_state(uint8_t *lock_state)
 	ret = trusty_read_lock_state(lock_state);
 	switch (ret) {
 	case TEE_SUCCESS:
+		ret = AVB_IO_RESULT_OK;
 		break;
 	case TEE_ERROR_GENERIC:
 	case TEE_ERROR_NO_DATA:
 	case TEE_ERROR_ITEM_NOT_FOUND:
 		if (trusty_read_vbootkey_enable_flag(&vboot_flag)) {
 			printf("Can't read vboot flag\n");
-			return -1;
+			return AVB_IO_RESULT_ERROR_IO;
 		}
 
 		if (vboot_flag)
@@ -180,36 +187,41 @@ int rk_avb_read_lock_state(uint8_t *lock_state)
 
 		if (rk_avb_write_lock_state(*lock_state)) {
 			printf("avb_write_lock_state error!");
-			ret = -1;
+			ret = AVB_IO_RESULT_ERROR_IO;
 		} else {
 			ret = trusty_read_lock_state(lock_state);
+			if (ret == 0)
+				ret = AVB_IO_RESULT_OK;
+			else
+				ret = AVB_IO_RESULT_ERROR_IO;
 		}
 		break;
 	default:
+		ret = AVB_IO_RESULT_ERROR_IO;
 		printf("%s: trusty_read_lock_state failed\n", __FILE__);
 	}
 
 	return ret;
 #else
-	return -1;
+	return AVB_IO_RESULT_ERROR_IO;
 #endif
 }
 
-int rk_avb_write_perm_attr_flag(uint8_t flag)
+AvbIOResult rk_avb_write_perm_attr_flag(uint8_t flag)
 {
 #ifdef CONFIG_OPTEE_CLIENT
 	if (trusty_write_permanent_attributes_flag(flag)) {
 		printf("trusty_write_permanent_attributes_flag error!\n");
-		return -1;
+		return AVB_IO_RESULT_ERROR_IO;
 	}
 
-	return 0;
+	return AVB_IO_RESULT_OK;
 #else
-	return -1;
+	return AVB_IO_RESULT_ERROR_IO;
 #endif
 }
 
-int rk_avb_read_perm_attr_flag(uint8_t *flag)
+AvbIOResult rk_avb_read_perm_attr_flag(uint8_t *flag)
 {
 #ifdef CONFIG_OPTEE_CLIENT
 	int ret;
@@ -217,6 +229,7 @@ int rk_avb_read_perm_attr_flag(uint8_t *flag)
 	ret = trusty_read_permanent_attributes_flag(flag);
 	switch (ret) {
 	case TEE_SUCCESS:
+		ret = AVB_IO_RESULT_OK;
 		break;
 	case TEE_ERROR_GENERIC:
 	case TEE_ERROR_NO_DATA:
@@ -224,19 +237,24 @@ int rk_avb_read_perm_attr_flag(uint8_t *flag)
 		*flag = 0;
 		if (rk_avb_write_perm_attr_flag(*flag)) {
 			printf("avb_write_perm_attr_flag error!");
-			ret = -1;
+			ret = AVB_IO_RESULT_ERROR_IO;
 		} else {
 			ret = trusty_read_permanent_attributes_flag(flag);
+			if (ret == 0)
+				ret = AVB_IO_RESULT_OK;
+			else
+				ret = AVB_IO_RESULT_ERROR_IO;
 		}
 		break;
 	default:
+		ret = AVB_IO_RESULT_ERROR_IO;
 		printf("%s: trusty_read_permanent_attributes_flag failed",
 		       __FILE__);
 	}
 
 	return ret;
 #else
-	return -1;
+	return AVB_IO_RESULT_ERROR_IO;
 #endif
 }
 
@@ -493,7 +511,7 @@ void rk_avb_get_at_vboot_state(char *buf)
 		unlock_dis_val = "";
 	} else {
 		lock_val = (temp_flag & LOCK_MASK) ? "0" : "1";
-		unlock_dis_val = (temp_flag & UNLOCK_DISABLE_MASK) ? "1" : "0";
+		unlock_dis_val = (temp_flag & DISABLE_UNLOCK_MASK) ? "1" : "0";
 	}
 
 	temp_flag = 0;
@@ -681,7 +699,6 @@ int rk_avb_write_perm_attr(u16 id, void *pbuf, u16 size)
 {
 	uint8_t lock_state;
 #ifndef CONFIG_ROCKCHIP_PRELOADER_PUB_KEY
-	sha256_context ctx;
 	uint8_t digest[SHA256_SUM_LEN] = {0};
 	uint8_t digest_temp[SHA256_SUM_LEN] = {0};
 	uint8_t perm_attr_temp[PERM_ATTR_TOTAL_SIZE] = {0};
@@ -715,11 +732,8 @@ int rk_avb_write_perm_attr(u16 id, void *pbuf, u16 size)
 					return -EIO;
 				}
 
-				sha256_starts(&ctx);
-				sha256_update(&ctx,
-					      (const uint8_t *)perm_attr_temp,
-					      PERM_ATTR_TOTAL_SIZE);
-				sha256_finish(&ctx, digest);
+				sha256_csum((const unsigned char *)perm_attr_temp,
+					    PERM_ATTR_TOTAL_SIZE, digest);
 				if (memcmp(digest, digest_temp, SHA256_SUM_LEN) == 0) {
 					debug("%s The hash has been written!\n", __func__);
 					return 0;
@@ -745,10 +759,8 @@ int rk_avb_write_perm_attr(u16 id, void *pbuf, u16 size)
 		}
 #ifndef CONFIG_ROCKCHIP_PRELOADER_PUB_KEY
 		memset(digest, 0, SHA256_SUM_LEN);
-		sha256_starts(&ctx);
-		sha256_update(&ctx, (const uint8_t *)pbuf,
-			      PERM_ATTR_TOTAL_SIZE);
-		sha256_finish(&ctx, digest);
+		sha256_csum((const unsigned char *)pbuf, PERM_ATTR_TOTAL_SIZE,
+			    digest);
 
 		if (rk_avb_write_attribute_hash((uint8_t *)digest,
 						SHA256_SUM_LEN)) {
@@ -775,7 +787,7 @@ int rk_avb_write_perm_attr(u16 id, void *pbuf, u16 size)
 
 		break;
 	case AT_PERM_ATTR_CER_FUSE:
-		if (size != 256) {
+		if (size != RK_AVB_PERM_ATTR_CER_SIZE) {
 			debug("%s Permanent attribute rsahash size is not equal!\n",
 			      __func__);
 			return -EINVAL;
@@ -809,8 +821,8 @@ int rk_avb_read_perm_attr(u16 id, void *pbuf, u16 size)
 		ret = rk_avb_read_permanent_attributes((uint8_t *)pbuf, PERM_ATTR_TOTAL_SIZE);
 		break;
 	case AT_PERM_ATTR_CER_FUSE:
-		size = PERM_ATTR_TOTAL_SIZE;
-		ret = rk_avb_get_perm_attr_cer((uint8_t *)pbuf, 256);
+		size = RK_AVB_PERM_ATTR_CER_SIZE;
+		ret = rk_avb_get_perm_attr_cer((uint8_t *)pbuf, RK_AVB_PERM_ATTR_CER_SIZE);
 		break;
 	case AT_LOCK_VBOOT:
 		break;

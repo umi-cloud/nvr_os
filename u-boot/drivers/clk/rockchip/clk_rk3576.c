@@ -989,6 +989,7 @@ static ulong rk3576_aclk_vop_get_clk(struct rk3576_clk_priv *priv, ulong clk_id)
 			parent = priv->lpll_hz / 2;
 		return DIV_TO_RATE(parent, div);
 	case ACLK_VO0_ROOT:
+	case CLK_HDMITX0_REF:
 		con = readl(&cru->clksel_con[149]);
 		div = (con & ACLK_VO0_ROOT_DIV_MASK) >> ACLK_VO0_ROOT_DIV_SHIFT;
 		sel = (con & ACLK_VO0_ROOT_SEL_MASK) >> ACLK_VO0_ROOT_SEL_SHIFT;
@@ -1255,7 +1256,7 @@ static ulong rk3576_dclk_vop_set_clk(struct rk3576_clk_priv *priv,
 			}
 
 			div = DIV_ROUND_UP(pll_rate, rate);
-			if (div > 255)
+			if (div > 255 || div < 1)
 				continue;
 			now = pll_rate / div;
 			if (abs(rate - now) < abs(rate - best_rate)) {
@@ -2156,6 +2157,7 @@ static ulong rk3576_clk_get_rate(struct clk *clk)
 	case ACLK_VO1_ROOT:
 	case HCLK_VOP_ROOT:
 	case PCLK_VOP_ROOT:
+	case CLK_HDMITX0_REF:
 		rate = rk3576_aclk_vop_get_clk(priv, clk->id);
 		break;
 	case DCLK_VP0:
@@ -2539,8 +2541,19 @@ static int rk3576_clk_probe(struct udevice *dev)
 {
 	struct rk3576_clk_priv *priv = dev_get_priv(dev);
 	int ret;
-#if CONFIG_IS_ENABLED(CLK_SCMI)
+#if defined(CONFIG_CLK_SCMI) && !defined(CONFIG_MOS_SUPPORT) && !defined(CONFIG_SPL_BUILD)
 	struct clk clk;
+#endif
+
+
+#ifdef CONFIG_MOS_SECONDARY
+	priv->spll_hz = 702000000;
+	priv->cpll_hz = rockchip_pll_get_rate(&rk3576_pll_clks[CPLL], priv->cru, CPLL);
+	priv->gpll_hz = rockchip_pll_get_rate(&rk3576_pll_clks[GPLL], priv->cru, GPLL);
+	priv->grf = syscon_get_first_range(ROCKCHIP_SYSCON_GRF);
+	if (IS_ERR(priv->grf))
+		return PTR_ERR(priv->grf);
+	return 0;
 #endif
 
 	priv->sync_kernel = false;
@@ -2599,8 +2612,7 @@ static int rk3576_clk_probe(struct udevice *dev)
 
 	rk3576_clk_init(priv);
 
-#if CONFIG_IS_ENABLED(CLK_SCMI)
-#ifndef CONFIG_SPL_BUILD
+#if defined(CONFIG_CLK_SCMI) && !defined(CONFIG_MOS_SUPPORT) && !defined(CONFIG_SPL_BUILD)
 	ret = rockchip_get_scmi_clk(&clk.dev);
 	if (ret) {
 		printf("Failed to get scmi clk dev, ret=%d\n", ret);
@@ -2620,7 +2632,6 @@ static int rk3576_clk_probe(struct udevice *dev)
 	ret = clk_set_rate(&clk, CPU_PVTPLL_HZ);
 	if (ret < 0)
 		printf("Failed to set cpub, ret=%d\n", ret);
-#endif
 #endif
 
 	/* Process 'assigned-{clocks/clock-parents/clock-rates}' properties */

@@ -127,6 +127,10 @@ dumpimage-objs := $(dumpimage-mkimage-objs) dumpimage.o
 mkimage-objs   := $(dumpimage-mkimage-objs) mkimage.o
 fit_info-objs   := $(dumpimage-mkimage-objs) fit_info.o
 fit_check_sign-objs   := $(dumpimage-mkimage-objs) fit_check_sign.o
+ifdef CONFIG_TOOLS_STATIC_FIT
+HOSTLDFLAGS_mkimage := -static
+HOSTLDFLAGS_fit_check_sign := -static
+endif
 
 ifneq ($(CONFIG_MX23)$(CONFIG_MX28),)
 # Add CONFIG_MXS into host CFLAGS, so we can check whether or not register
@@ -138,6 +142,7 @@ ifdef CONFIG_FIT_SIGNATURE
 # This affects include/image.h, but including the board config file
 # is tricky, so manually define this options here.
 HOST_EXTRACFLAGS	+= -DCONFIG_FIT_SIGNATURE
+HOST_EXTRACFLAGS	+= -DCONFIG_FIT_SIGNATURE_MAX_SIZE=$(CONFIG_FIT_SIGNATURE_MAX_SIZE)
 endif
 
 ifdef CONFIG_SYS_U_BOOT_OFFS

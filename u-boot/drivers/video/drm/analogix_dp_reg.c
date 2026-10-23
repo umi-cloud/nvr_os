@@ -28,12 +28,6 @@
 #include "rockchip_connector.h"
 #include "analogix_dp.h"
 
-#define COMMON_INT_MASK_1	0
-#define COMMON_INT_MASK_2	0
-#define COMMON_INT_MASK_3	0
-#define COMMON_INT_MASK_4	(HOTPLUG_CHG | HPD_LOST | PLUG)
-#define INT_STA_MASK		INT_HPD
-
 static void analogix_dp_write(struct analogix_dp_device *dp, u32 reg, u32 val)
 {
 	readl(dp->reg_base);
@@ -167,9 +161,6 @@ void analogix_dp_reset(struct analogix_dp_device *dp)
 	analogix_dp_write(dp, ANALOGIX_DP_PKT_SEND_CTL, 0x0);
 	analogix_dp_write(dp, ANALOGIX_DP_HDCP_CTL, 0x0);
 
-	analogix_dp_write(dp, ANALOGIX_DP_HPD_DEGLITCH_L, 0x5e);
-	analogix_dp_write(dp, ANALOGIX_DP_HPD_DEGLITCH_H, 0x1a);
-
 	analogix_dp_write(dp, ANALOGIX_DP_LINK_DEBUG_CTL, 0x10);
 
 	analogix_dp_write(dp, ANALOGIX_DP_PHY_TEST, 0x0);
@@ -190,23 +181,15 @@ void analogix_dp_swreset(struct analogix_dp_device *dp)
 
 void analogix_dp_config_interrupt(struct analogix_dp_device *dp)
 {
-	u32 reg;
-
 	/* 0: mask, 1: unmask */
-	reg = COMMON_INT_MASK_1;
-	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_1, reg);
+	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_1, 0);
+	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_2, 0);
+	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_3, 0);
 
-	reg = COMMON_INT_MASK_2;
-	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_2, reg);
-
-	reg = COMMON_INT_MASK_3;
-	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_3, reg);
-
-	reg = COMMON_INT_MASK_4;
-	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_4, reg);
-
-	reg = INT_STA_MASK;
-	analogix_dp_write(dp, ANALOGIX_DP_INT_STA_MASK, reg);
+	if (dp->force_hpd || dm_gpio_is_valid(&dp->hpd_gpio))
+		analogix_dp_mute_hpd_interrupt(dp);
+	else
+		analogix_dp_unmute_hpd_interrupt(dp);
 }
 
 void analogix_dp_mute_hpd_interrupt(struct analogix_dp_device *dp)
@@ -215,11 +198,11 @@ void analogix_dp_mute_hpd_interrupt(struct analogix_dp_device *dp)
 
 	/* 0: mask, 1: unmask */
 	reg = analogix_dp_read(dp, ANALOGIX_DP_COMMON_INT_MASK_4);
-	reg &= ~COMMON_INT_MASK_4;
+	reg &= ~HOTPLUG_CHG;
 	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_4, reg);
 
 	reg = analogix_dp_read(dp, ANALOGIX_DP_INT_STA_MASK);
-	reg &= ~INT_STA_MASK;
+	reg &= ~INT_HPD;
 	analogix_dp_write(dp, ANALOGIX_DP_INT_STA_MASK, reg);
 }
 
@@ -228,10 +211,12 @@ void analogix_dp_unmute_hpd_interrupt(struct analogix_dp_device *dp)
 	u32 reg;
 
 	/* 0: mask, 1: unmask */
-	reg = COMMON_INT_MASK_4;
+	reg = analogix_dp_read(dp, ANALOGIX_DP_COMMON_INT_MASK_4);
+	reg |= HOTPLUG_CHG;
 	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_4, reg);
 
-	reg = INT_STA_MASK;
+	reg = analogix_dp_read(dp, ANALOGIX_DP_INT_STA_MASK);
+	reg |= INT_HPD;
 	analogix_dp_write(dp, ANALOGIX_DP_INT_STA_MASK, reg);
 }
 
@@ -396,7 +381,8 @@ void analogix_dp_init_hpd(struct analogix_dp_device *dp)
 	if (dm_gpio_is_valid(&dp->hpd_gpio))
 		return;
 
-	analogix_dp_clear_hotplug_interrupts(dp);
+	analogix_dp_write(dp, ANALOGIX_DP_HPD_DEGLITCH_H, 0xbb);
+	analogix_dp_write(dp, ANALOGIX_DP_HPD_DEGLITCH_L, 0x80);
 
 	reg = analogix_dp_read(dp, ANALOGIX_DP_SYS_CTL_3);
 	reg &= ~(F_HPD | HPD_CTRL);
@@ -457,17 +443,16 @@ void analogix_dp_init_aux(struct analogix_dp_device *dp)
 	reg = RPLY_RECEIV | AUX_ERR;
 	analogix_dp_write(dp, ANALOGIX_DP_INT_STA, reg);
 
+	analogix_dp_set_analog_power_down(dp, AUX_BLOCK, true);
+	udelay(11);
+	analogix_dp_set_analog_power_down(dp, AUX_BLOCK, false);
+
 	analogix_dp_reset_aux(dp);
 
 	/* Disable AUX transaction H/W retry */
-	if (dp->plat_data.dev_type == ROCKCHIP_DP)
-		reg = AUX_BIT_PERIOD_EXPECTED_DELAY(0) |
-		      AUX_HW_RETRY_COUNT_SEL(3) |
-		      AUX_HW_RETRY_INTERVAL_600_MICROSECONDS;
-	else
-		reg = AUX_BIT_PERIOD_EXPECTED_DELAY(3) |
-		      AUX_HW_RETRY_COUNT_SEL(0) |
-		      AUX_HW_RETRY_INTERVAL_600_MICROSECONDS;
+	reg = AUX_HW_RETRY_COUNT_SEL(0) |
+	      AUX_HW_RETRY_INTERVAL_600_MICROSECONDS;
+
 	analogix_dp_write(dp, ANALOGIX_DP_AUX_HW_RETRY_CTL, reg);
 
 	/* Receive AUX Channel DEFER commands equal to DEFFER_COUNT*64 */

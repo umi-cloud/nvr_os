@@ -6,8 +6,10 @@
 #include <common.h>
 #include <dm.h>
 #include <spl.h>
+#include <wait_bit.h>
 #include <asm/io.h>
 #include <asm/arch/cpu.h>
+#include <asm/arch/boot_mode.h>
 #include <asm/arch/hardware.h>
 #include <asm/arch/grf_rv1103b.h>
 #include <asm/arch/ioc_rv1103b.h>
@@ -15,12 +17,18 @@
 DECLARE_GLOBAL_DATA_PTR;
 
 #define PERI_CRU_BASE			0x20000000
+#define PERICRU_PERISOFTRST_CON09	0x0a24
 #define PERICRU_PERISOFTRST_CON10	0x0a28
 
+#define TOP_CRU_BASE			0x20060000
+#define TOPCRU_CRU_GLBRST_ST		0x0c04
+#define GLB_WDTn_RST_ST			GENMASK(9, 6)
+#define WDT_SYS_RST_ST			GENMASK(15, 10)
 #define PMU0_CRU_BASE			0x20070000
 #define PMUCRU_PMUSOFTRST_CON02		0x0a08
 
 #define GRF_SYS_BASE			0x20150000
+#define GRF_SYS_MACPHY_CON0		0x00b0
 #define GRF_SYS_HPMCU_CACHE_MISC	0x0214
 
 #define GPIO0_IOC_BASE			0x201B0000
@@ -156,12 +164,32 @@ void rk_meta_process(void)
 	/* trigger software irq to hpmcu that means meta was ready */
 	writel(0x00080008, GRF_SYS_BASE + GRF_SYS_HPMCU_CACHE_MISC);
 }
+
+void spl_rk_board_prepare_for_jump(struct spl_image_info *spl_image)
+{
+	/* reset hpmcu released by maskrom if next stage is U-Boot. */
+	if (spl_image->next_stage == SPL_NEXT_STAGE_UBOOT)
+		writel(0xf000f0, PERI_CRU_BASE + PERICRU_PERISOFTRST_CON10);
+}
 #endif
 
 #ifndef CONFIG_TPL_BUILD
 int arch_cpu_init(void)
 {
 #if defined(CONFIG_SPL_BUILD) || defined(CONFIG_SUPPORT_USBPLUG)
+	u32 cru_glbrst_st = readl(TOP_CRU_BASE + TOPCRU_CRU_GLBRST_ST);
+	/* write BOOT_WATCHDOG to boot mode register, if reset by WDT */
+	if (cru_glbrst_st & GLB_WDTn_RST_ST) {
+		/*
+		 * Don't change boot mode to BOOT_WATCHDOG in order to keep different from
+		 * "boot mode: watchdog" if WDT reset was caused by Linux kernel panic.
+		 */
+		if (readl(CONFIG_ROCKCHIP_BOOT_MODE_REG) != BOOT_PANIC)
+			writel(BOOT_WATCHDOG, CONFIG_ROCKCHIP_BOOT_MODE_REG);
+		/* clear flag if reset by WDT trigger */
+		writel((cru_glbrst_st & ~WDT_SYS_RST_ST), TOP_CRU_BASE + TOPCRU_CRU_GLBRST_ST);
+	}
+
 	/* Set all devices to Non-secure */
 	writel(0xffff0000, SGRF_SYS_BASE + FIREWALL_CON0);
 	writel(0xffff0000, SGRF_SYS_BASE + FIREWALL_CON1);
@@ -181,7 +209,7 @@ int arch_cpu_init(void)
 	board_set_iomux(IF_TYPE_MTD, 0, 0);
 #endif
 
-#if defined(CONFIG_MMC_DW_ROCKCHIP)
+#if defined(CONFIG_ROCKCHIP_SDMMC_IOMUX)
 	/* Set the sdmmc iomux and power cycle */
 	board_set_iomux(IF_TYPE_MMC, 1, 0);
 	/* Enable force_jtag */
@@ -239,6 +267,144 @@ int rk_board_scan_bootdev(void)
 	return 0;
 }
 #endif
+
+#define GMAC_NODE_FDT_PATH			"/ethernet@20800000"
+#define	PHY_ADDR				2
+#define	PAGE_SWITCH				0x1f
+#define	DISABLE_APS_REG				0x12
+#define	DISABLE_APS_VAL				0x4824
+#define	PHYAFE_PDCW_REG				0x1c
+#define	PHYAFE_PDCW_VAL				0x8880
+#define	PD_ANALOG_REG				0x0
+#define PD_ANALOG_VAL				0x3900
+#define RV1106_MACPHY_SHUTDOWN			BIT(1)
+#define RV1106_MACPHY_ENABLE_MASK		BIT(1)
+
+#define GMAC_BASE				0x20800000
+#define MDIO_ADDRESS				0x200
+#define MDIO_DATA				0x204
+
+#define EQOS_MAC_MDIO_ADDRESS_PA_SHIFT		21
+#define EQOS_MAC_MDIO_ADDRESS_RDA_SHIFT		16
+#define EQOS_MAC_MDIO_ADDRESS_CR_SHIFT		8
+#define EQOS_MAC_MDIO_ADDRESS_SKAP		BIT(4)
+#define EQOS_MAC_MDIO_ADDRESS_GOC_SHIFT		2
+#define EQOS_MAC_MDIO_ADDRESS_GOC_READ		3
+#define EQOS_MAC_MDIO_ADDRESS_GOC_WRITE		1
+#define EQOS_MAC_MDIO_ADDRESS_C45E		BIT(1)
+#define EQOS_MAC_MDIO_ADDRESS_GB		BIT(0)
+
+#define EQOS_MAC_MDIO_DATA_GD_MASK		0xffff
+
+#define EQOS_MAC_MDIO_ADDRESS_CR_100_150	1
+#define EQOS_MAC_MDIO_ADDRESS_CR_20_35		2
+#define EQOS_MAC_MDIO_ADDRESS_CR_250_300	5
+
+static int gmac_mdio_wait_idle(void)
+{
+	u32 mdio_address = GMAC_BASE + MDIO_ADDRESS;
+
+	return wait_for_bit_le32((u32 *)mdio_address,
+				 EQOS_MAC_MDIO_ADDRESS_GB, false,
+				 1000000, true);
+}
+
+static int gmac_mdio_write(int mdio_addr, int mdio_reg, u16 mdio_val)
+{
+	u32 val;
+	int ret;
+
+	ret = gmac_mdio_wait_idle();
+	if (ret) {
+		pr_err("MDIO not idle at entry, ret: %d", ret);
+		return ret;
+	}
+
+	writel(mdio_val, GMAC_BASE + MDIO_DATA);
+
+	val = readl(GMAC_BASE + MDIO_ADDRESS);
+	val &= EQOS_MAC_MDIO_ADDRESS_SKAP |
+		EQOS_MAC_MDIO_ADDRESS_C45E;
+	val |= (mdio_addr << EQOS_MAC_MDIO_ADDRESS_PA_SHIFT) |
+		(mdio_reg << EQOS_MAC_MDIO_ADDRESS_RDA_SHIFT) |
+		(EQOS_MAC_MDIO_ADDRESS_CR_250_300 <<
+		 EQOS_MAC_MDIO_ADDRESS_CR_SHIFT) |
+		(EQOS_MAC_MDIO_ADDRESS_GOC_WRITE <<
+		 EQOS_MAC_MDIO_ADDRESS_GOC_SHIFT) |
+		EQOS_MAC_MDIO_ADDRESS_GB;
+	writel(val, GMAC_BASE + MDIO_ADDRESS);
+
+	ret = gmac_mdio_wait_idle();
+	if (ret) {
+		pr_err("MDIO read didn't complete, ret: %d", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int rk_board_fdt_pwrdn_gmac(const void *blob)
+{
+	void *fdt = (void *)gd->fdt_blob;
+	int gmac_node;
+
+	/* Turn off GMAC FEPHY to reduce chip power consumption at uboot level,
+	 * if the gmac node is disabled at kernel dtb. RV1106/1103 has the
+	 * internal gmac phy, u-boot.dtb defines and enables the gmac node
+	 * by default, so even if the gmac node of the kernel dts is disabled,
+	 * U-Boot will enable and initialize the gmac phy. So it is not okay
+	 * to turn off gmac phy by default in arch_cpu_init(), need to turn off
+	 * gmac phy in the current function.
+	 */
+	gmac_node = fdt_path_offset(gd->fdt_blob, GMAC_NODE_FDT_PATH);
+	if (fdt_stringlist_search(fdt, gmac_node, "status", "disabled") >= 0) {
+		writel(0x08000800, PERI_CRU_BASE + PERICRU_PERISOFTRST_CON09);
+		writel(0xffff0b40, GRF_SYS_BASE + GRF_SYS_MACPHY_CON0);
+		udelay(20);
+		writel(0x08000000, PERI_CRU_BASE + PERICRU_PERISOFTRST_CON09);
+		udelay(100);
+
+		/* switch to page 1 */
+		gmac_mdio_write(PHY_ADDR, PAGE_SWITCH, 0x0100);
+		gmac_mdio_write(PHY_ADDR, DISABLE_APS_REG,
+				DISABLE_APS_VAL);
+		/* switch to pae 6 */
+		gmac_mdio_write(PHY_ADDR, PAGE_SWITCH, 0x0600);
+		gmac_mdio_write(PHY_ADDR, PHYAFE_PDCW_REG,
+				PHYAFE_PDCW_VAL);
+		/* switch to page 0 */
+		gmac_mdio_write(PHY_ADDR, PAGE_SWITCH, 0x0000);
+		gmac_mdio_write(PHY_ADDR, PD_ANALOG_REG,
+				PD_ANALOG_VAL);
+		udelay(20);
+		writel(0x00020002, GRF_SYS_BASE + GRF_SYS_MACPHY_CON0);
+	}
+
+	return 0;
+}
+
+int rk_board_fdt_fixup(const void *blob)
+{
+	rk_board_fdt_pwrdn_gmac(blob);
+
+	return 0;
+}
+
+int fit_standalone_release(char *id, uintptr_t entry_point)
+{
+	if (!strcmp(id, "hpmcu")) {
+		/* reset hpmcu */
+		writel(0x00f000f0, PERI_CRU_BASE + PERICRU_PERISOFTRST_CON10);
+		writel(0x00080008, SGRF_SYS_BASE + SGRF_SYS_SOC_CON2);
+		/* set the hpmcu boot address */
+		writel(entry_point, SGRF_SYS_BASE + SGRF_SYS_HPMCU_BOOT_DDR);
+		writel(0x80000000, SGRF_SYS_BASE + SGRF_SYS_SOC_CON3);
+		/* release hpmcu */
+		writel(0x00f00000, PERI_CRU_BASE + PERICRU_PERISOFTRST_CON10);
+	}
+
+	return 0;
+}
 
 #if defined(CONFIG_ROCKCHIP_EMMC_IOMUX) && defined(CONFIG_ROCKCHIP_SFC_IOMUX)
 #error FSPI and eMMC iomux is incompatible for rv1103b Soc. You should close one of them.

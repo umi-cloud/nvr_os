@@ -15,11 +15,13 @@
 #include <linux/mtd/mtd.h>
 #include <optee_include/OpteeClientInterface.h>
 #include <dm.h>
+#include <mapmem.h>
 #include <misc.h>
 #include <mmc.h>
 #include <scsi.h>
 #include <stdlib.h>
 #include <usbplug.h>
+#include <vdisk.h>
 #include <asm/arch/vendor.h>
 #include <rockusb.h>
 
@@ -248,6 +250,9 @@ static int rkusb_do_read_flash_id(struct fsg_common *common,
 	case IF_TYPE_NVME:
 		str = "PCIE ";
 		break;
+	case IF_TYPE_RVD:
+		str = "RVD  ";
+		break;
 	default:
 		str = "UNKN "; /* unknown */
 		break;
@@ -306,7 +311,7 @@ static int rkusb_do_read_flash_info(struct fsg_common *common,
 		if (mtd) {
 			finfo.block_size = mtd->erasesize >> 9;
 			finfo.page_size = mtd->writesize >> 9;
-#ifdef CONFIG_SUPPORT_USBPLUG
+#if defined(CONFIG_SUPPORT_USBPLUG) || (CONFIG_ROCKCHIP_NEW_IDB)
 			/* Using 4KB pagesize as 2KB for idblock */
 			if (finfo.page_size == 8 && desc->devnum == BLK_MTD_SPI_NAND)
 				finfo.page_size |= (4 << 4);
@@ -608,6 +613,17 @@ static int rkusb_do_vs_write(struct fsg_common *common)
 							curlun->sense_data = SS_WRITE_ERROR;
 							return -EIO;
 						}
+					} else if (key_len == 4 && memcmp(data + 9, "iswd", 4) == 0) {
+						uint8_t value;
+						if (trusty_oem_otp_key_is_written(key_id, &value) != 0) {
+							printf("trusty_oem_otp_key_is_written error!\n");
+							common->phase_error = 1;
+							return -EIO;
+						}
+						if (value)
+							curlun->sense_data = 1;
+						else
+							curlun->sense_data = 0;
 					} else {
 						if (key_len != 16 && key_len != 24 && key_len != 32) {
 							printf("check oem otp key size fail!\n");
@@ -823,6 +839,75 @@ static int rkusb_do_uart_debug_read(struct fsg_common *common)
 }
 #endif
 
+/* SDRAM_READ_CHUNK_SIZE is determined by upgrade_tool. */
+#define SDRAM_READ_CHUNK_SIZE	0x4000
+
+static int rkusb_do_sdram_read(struct fsg_common *common)
+{
+	struct fsg_buffhd *bh;
+	u32 amount_left;
+	u32 amount;
+	u32 transfer_size;
+	u32 addr_lo;
+	u32 addr_hi = 0;
+	u64 addr;
+	int rc;
+
+	if (unlikely(common->data_size == 0 || common->usb_trb_size == 0))
+		return -EIO;
+
+	addr_lo = get_unaligned_be32(&common->cmnd[2]);
+	if (common->cmnd_size >= 13)
+		addr_hi = get_unaligned_be32(&common->cmnd[9]);
+	addr = ((u64)addr_hi << 32) | addr_lo;
+	transfer_size = min_t(u32, common->data_size, SDRAM_READ_CHUNK_SIZE);
+
+	debug("%s: addr_hi=0x%x addr_lo=0x%x addr=0x%llx size=0x%x transfer=0x%x\n",
+	      __func__, addr_hi, addr_lo, (unsigned long long)addr,
+	      common->data_size, transfer_size);
+
+	common->data_dir = DATA_DIR_TO_HOST;
+	common->data_size_from_cmnd = transfer_size;
+	common->residue = transfer_size;
+	common->usb_amount_left = transfer_size;
+
+	amount_left = transfer_size;
+	while (amount_left) {
+		void *src;
+
+		amount = min(amount_left, common->usb_trb_size);
+
+		/* Wait for the next buffer to become available */
+		bh = common->next_buffhd_to_fill;
+		while (bh->state != BUF_STATE_EMPTY) {
+			rc = sleep_thread(common);
+			if (rc)
+				return rc;
+		}
+
+		src = map_sysmem((phys_addr_t)addr, amount);
+		memcpy(bh->buf, src, amount);
+		unmap_sysmem(src);
+
+		addr += amount;
+		amount_left -= amount;
+		common->residue -= amount;
+		bh->inreq->length = amount;
+		bh->state = BUF_STATE_FULL;
+
+		if (!amount_left)
+			break;
+
+		bh->inreq->zero = 0;
+		START_TRANSFER_OR(common, bulk_in, bh->inreq,
+				  &bh->inreq_busy, &bh->state)
+			return -EIO;
+		common->next_buffhd_to_fill = bh->next;
+	}
+
+	return -EIO;
+}
+
 static int rkusb_do_switch_storage(struct fsg_common *common)
 {
 	enum if_type type, cur_type = ums[common->lun].block_dev.if_type;
@@ -854,6 +939,7 @@ static int rkusb_do_switch_storage(struct fsg_common *common)
 		break;
 #if defined(CONFIG_SCSI) && defined(CONFIG_CMD_SCSI) && (defined(CONFIG_AHCI) || defined(CONFIG_UFS))
 	case BOOT_TYPE_SATA:
+	case BOOT_TYPE_UFS:
 		type = IF_TYPE_SCSI;
 		devnum = 0;
 		scsi_scan(true);
@@ -863,6 +949,13 @@ static int rkusb_do_switch_storage(struct fsg_common *common)
 		type = IF_TYPE_NVME;
 		devnum = 0;
 		break;
+#ifdef CONFIG_VIRTUAL_DISK
+	case BOOT_TYPE_RVD:
+		type = IF_TYPE_RVD;
+		devnum = 0;
+		rvd_init();
+		break;
+#endif
 	default:
 		printf("Bootdev 0x%x is not support\n", media);
 		return -ENODEV;
@@ -927,6 +1020,10 @@ static int rkusb_do_get_storage_info(struct fsg_common *common,
 
 	case IF_TYPE_SCSI:
 		media = BOOT_TYPE_SATA;
+#if defined(CONFIG_UFS)
+		if (ums[common->lun].block_dev.rawblksz == 4096)
+			media = BOOT_TYPE_UFS;
+#endif
 		break;
 
 	case IF_TYPE_RKNAND:
@@ -935,6 +1032,10 @@ static int rkusb_do_get_storage_info(struct fsg_common *common,
 
 	case IF_TYPE_NVME:
 		media = BOOT_TYPE_PCIE;
+		break;
+
+	case IF_TYPE_RVD:
+		media = BOOT_TYPE_RVD;
 		break;
 
 	default:
@@ -1153,6 +1254,11 @@ static int rkusb_cmd_process(struct fsg_common *common,
 		break;
 #endif
 
+	case RKUSB_SDRAM_READ_10:
+		*reply = rkusb_do_sdram_read(common);
+		rc = RKUSB_RC_FINISHED;
+		break;
+
 	case RKUSB_SWITCH_STORAGE:
 		*reply = rkusb_do_switch_storage(common);
 		rc = RKUSB_RC_FINISHED;
@@ -1194,7 +1300,6 @@ static int rkusb_cmd_process(struct fsg_common *common,
 	case RKUSB_READ_SPARE:
 	case RKUSB_GET_VERSION:
 	case RKUSB_ERASE_SYS_DISK:
-	case RKUSB_SDRAM_READ_10:
 	case RKUSB_SDRAM_WRITE_10:
 	case RKUSB_SDRAM_EXECUTE:
 	case RKUSB_LOW_FORMAT:

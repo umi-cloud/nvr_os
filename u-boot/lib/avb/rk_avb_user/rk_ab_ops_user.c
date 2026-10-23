@@ -308,7 +308,7 @@ int rk_avb_set_slot_active(unsigned int *slot_number)
 }
 
 static bool slot_is_bootable(AvbABSlotData* slot) {
-	return (slot->priority > 0) && 
+	return (slot->priority > 0) &&
 	       (slot->successful_boot || (slot->tries_remaining > 0));
 }
 
@@ -350,10 +350,15 @@ AvbABFlowResult rk_avb_ab_slot_select(AvbABOps* ab_ops,char* select_slot)
 
 	if (last_slot_index != slot_index_to_boot) {
 		last_slot_index = slot_index_to_boot;
-		printf("A/B-slot: %s, successful: %d, tries-remain: %d\n",
+		printf("A/B-slot: %s, successful: %d, tries-remain: %d (select)\n",
 		       select_slot,
 		       ab_data.slots[slot_index_to_boot].successful_boot,
 		       ab_data.slots[slot_index_to_boot].tries_remaining);
+
+		printf("A/B-slot: %s, successful: %d, tries-remain: %d\n",
+		       (!slot_index_to_boot) == 0 ? "_a" : "_b",
+		       ab_data.slots[!slot_index_to_boot].successful_boot,
+		       ab_data.slots[!slot_index_to_boot].tries_remaining);
 	}
 out:
 	return ret;
@@ -455,13 +460,17 @@ int rk_avb_get_current_slot(char *select_slot)
 	if (rk_avb_ab_slot_select(ops->ab_ops, select_slot) != 0) {
 #ifndef CONFIG_ANDROID_AVB
 		printf("###There is no bootable slot, bring up last_boot!###\n");
-		if (rk_get_lastboot() == 1)
+		if (rk_get_lastboot() == 1) {
 			memcpy(select_slot, "_b", 2);
-		else if(rk_get_lastboot() == 0)
+		} else if(rk_get_lastboot() == 0) {
 			memcpy(select_slot, "_a", 2);
-		else
-#endif
+		} else {
+                        printf("No valid last_boot. Boot from slot-A by default.\n");
+                        memcpy(select_slot, "_a", 2);
+                }
+#else
 			return -1;
+#endif
 		ret = 0;
 	}
 

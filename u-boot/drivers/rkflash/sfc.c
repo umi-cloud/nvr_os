@@ -15,6 +15,12 @@
 #define SFC_MAX_IOSIZE_VER4		(0xFFFFFFFF)
 
 static void __iomem *g_sfc_reg;
+static bool sfc_async_dma;
+
+void sfc_set_async_dma(bool enable)
+{
+	sfc_async_dma = enable;
+}
 
 static void sfc_reset(void)
 {
@@ -61,6 +67,14 @@ void sfc_disable_delay_lines(void)
 	writel(0, g_sfc_reg + SFC_DLL_CTRL0);
 }
 
+u16 sfc_get_max_dll_cells(void)
+{
+	if (sfc_get_version() >= SFC_VER_5)
+		return SCLK_SMP_SEL_MAX_V5;
+	else
+		return SCLK_SMP_SEL_MAX_V4;
+}
+
 int sfc_init(void __iomem *reg_addr)
 {
 	g_sfc_reg = reg_addr;
@@ -84,6 +98,10 @@ int sfc_request(struct rk_sfc_op *op, u32 addr, void *data, u32 size)
 	union SFCCMD_DATA cmd;
 	int reg;
 	int timeout = 0;
+	u32 *p_data = (u32 *)data;
+	u32 temp = 0;
+
+	rksfc_set_cs_gpio(op->sfcmd.b.cs, true);
 
 	reg = readl(g_sfc_reg + SFC_FSR);
 
@@ -92,6 +110,20 @@ int sfc_request(struct rk_sfc_op *op, u32 addr, void *data, u32 size)
 		sfc_reset();
 
 	cmd.d32 = op->sfcmd.d32;
+
+	if (size && size < 4 && cmd.b.rw == SFC_WRITE) {
+		if (size == 1)
+			temp = *((u8 *)data);
+		else if (size == 2)
+			temp = *((u16 *)data);
+		else
+			temp = ((u8 *)data)[0] | ((u8 *)data)[1] << 8 | ((u8 *)data)[2] << 16;
+		p_data = &temp;
+	} else if (size >= 4 && ((uintptr_t)data & 0x3)) {
+		printf("%s data addr unaligned access\n", __func__);
+	} else if (size & 0x3 && cmd.b.rw == SFC_WRITE) {
+		printf("%s data size unaligned access\n", __func__);
+	}
 
 	if (cmd.b.addrbits == SFC_ADDR_XBITS) {
 		union SFCCTRL_DATA ctrl;
@@ -141,6 +173,11 @@ int sfc_request(struct rk_sfc_op *op, u32 addr, void *data, u32 size)
 		writel((unsigned long)bb.bounce_buffer, g_sfc_reg + SFC_DMA_ADDR);
 		writel(SFC_DMA_START, g_sfc_reg + SFC_DMA_TRIGGER);
 
+		if (sfc_async_dma) {
+			bounce_buffer_stop(&bb);
+			return ret;
+		}
+
 		timeout = size * 10;
 
 		while ((readl(g_sfc_reg + SFC_SR) & SFC_BUSY) &&
@@ -155,7 +192,6 @@ int sfc_request(struct rk_sfc_op *op, u32 addr, void *data, u32 size)
 	} else {
 		u32 i, words, count, bytes;
 		union SFCFSR_DATA    fifostat;
-		u32 *p_data = (u32 *)data;
 
 		if (cmd.b.rw == SFC_WRITE) {
 			words  = (size + 3) >> 2;
@@ -260,5 +296,6 @@ exit_wait:
 	}
 
 	sfc_delay(1); /* CS# High Time (read/write) >100ns */
+	rksfc_set_cs_gpio(op->sfcmd.b.cs, false);
 	return ret;
 }

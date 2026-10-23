@@ -18,6 +18,9 @@
 #include <spl.h>
 #include <spl_ab.h>
 #include <linux/libfdt.h>
+#include <asm/arch/vendor.h>
+
+DECLARE_GLOBAL_DATA_PTR;
 
 #ifndef CONFIG_SYS_BOOTM_LEN
 #define CONFIG_SYS_BOOTM_LEN	(64 << 20)
@@ -282,8 +285,18 @@ static int spl_load_fit_image(struct spl_load_info *info, ulong sector,
 
 	if (image_comp != IH_COMP_NONE && image_comp != IH_COMP_ZIMAGE) {
 		/* Empirically, 2MB is enough for U-Boot, tee and atf */
-		if (fit_image_get_comp_addr(fit, node, &comp_addr))
-			comp_addr = load_addr + FIT_MAX_SPL_IMAGE_SZ;
+		if (fit_image_get_comp_addr(fit, node, &comp_addr)) {
+			/*
+			 * Why is 2 * FIT_MAX_SPL_IMAGE_SZ?
+			 * one is for uncompressed firmware, another is for compressed firmware.
+			 */
+			if (!gd->ram_top ||
+			    load_addr + 2 * FIT_MAX_SPL_IMAGE_SZ <= gd->ram_top)
+				comp_addr = load_addr + FIT_MAX_SPL_IMAGE_SZ;
+			else
+				/* Mainly for tiny mem device, such as 64M DRAM. */
+				comp_addr = load_addr - FIT_MAX_SPL_IMAGE_SZ;
+		}
 	} else {
 		comp_addr = load_addr;
 	}
@@ -308,7 +321,7 @@ static int spl_load_fit_image(struct spl_load_info *info, ulong sector,
 			return -ENOENT;
 
 		load_ptr = (comp_addr + align_len) & ~align_len;
-#if  defined(CONFIG_ARCH_ROCKCHIP)
+#if defined(CONFIG_ARCH_ROCKCHIP)
 		if ((load_ptr < CONFIG_SYS_SDRAM_BASE) ||
 		     (load_ptr >= CONFIG_SYS_SDRAM_BASE + SDRAM_MAX_SIZE))
 			load_ptr = (ulong)memalign(ARCH_DMA_MINALIGN, len);
@@ -526,7 +539,7 @@ static void *spl_fit_load_blob(struct spl_load_info *info,
 			align_len) & ~align_len);
 	sectors = get_aligned_image_size(info, size, 0);
 	count = info->read(info, sector, sectors, fit);
-#if defined(CONFIG_SPL_MTD_SUPPORT) && !defined(CONFIG_FPGA_RAM)
+#if defined(CONFIG_SPL_MTD_SUPPORT) && !defined(CONFIG_FPGA_RAM) && defined(CONFIG_MTD_BLK)
 	mtd_blk_map_fit(info->dev, sector, fit);
 #endif
 	debug("fit read sector %lx, sectors=%d, dst=%p, count=%lu\n",
@@ -936,7 +949,9 @@ int spl_load_simple_fit(struct spl_image_info *spl_image,
 #ifdef CONFIG_MP_BOOT
 	mpb_init_1(*info);
 #endif
-
+#ifdef CONFIG_SPL_ROCKCHIP_VENDOR_PARTITION
+	flash_vendor_dev_ops_register(info);
+#endif
 	printf("Trying fit image at 0x%lx sector\n", sector_offs);
 	for (i = 0; i < CONFIG_SPL_FIT_IMAGE_MULTIPLE; i++) {
 		if (i > 0) {
@@ -978,4 +993,3 @@ int spl_load_simple_fit(struct spl_image_info *spl_image,
 
 	return ret;
 }
-

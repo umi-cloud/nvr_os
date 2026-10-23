@@ -170,6 +170,7 @@ struct rockchip_udphy {
 
 	/* clocks and rests */
 	struct reset_ctl *rsts;
+	struct clk_bulk clks;
 
 	/* PHY status management */
 	bool flip;
@@ -437,8 +438,6 @@ static int udphy_reset_init(struct rockchip_udphy *udphy, struct udevice *dev)
 			dev_err(dev, "failed to get %s reset\n", name);
 			goto err;
 		}
-
-		reset_assert(&udphy->rsts[idx]);
 	}
 
 	return 0;
@@ -1210,6 +1209,7 @@ static const struct phy_ops rockchip_u3phy_ops = {
 	.exit		= rockchip_u3phy_exit,
 };
 
+#if !CONFIG_IS_ENABLED(ROCKUSB_MAX_SPEED_HS)
 int rockchip_u3phy_uboot_init(fdt_addr_t phy_addr)
 {
 	struct udevice *udev = NULL;
@@ -1270,6 +1270,28 @@ disable_u3:
 
 	return -EOPNOTSUPP;
 }
+#endif
+
+static int udphy_get_initial_status(struct rockchip_udphy *udphy)
+{
+	const struct rockchip_udphy_cfg *cfg = udphy->cfgs;
+	u32 value;
+	int idx;
+
+	for(idx = 0; idx < cfg->num_rsts; idx++)
+		reset_deassert(&udphy->rsts[idx]);
+
+        regmap_read(udphy->pma_regmap, CMN_LANE_MUX_AND_EN_OFFSET, &value);
+        if (FIELD_GET(CMN_DP_LANE_MUX_ALL, value) && FIELD_GET(CMN_DP_LANE_EN_ALL, value)) {
+                udphy->status = UDPHY_MODE_DP;
+		return 0;
+	}
+
+	for(idx = 0; idx < cfg->num_rsts; idx++)
+		reset_assert(&udphy->rsts[idx]);
+
+	return 0;
+}
 
 static int rockchip_udphy_probe(struct udevice *dev)
 {
@@ -1299,6 +1321,21 @@ static int rockchip_udphy_probe(struct udevice *dev)
 	ret = udphy_parse_dt(udphy, dev);
 	if (ret)
 		return ret;
+
+#if defined(CONFIG_MOS_SUPPORT)
+	ret = clk_get_bulk(dev, &udphy->clks);
+	if (ret) {
+		dev_err(dev, "failed to get clk: %d\n", ret);
+		return ret;
+	}
+	ret = clk_enable_bulk(&udphy->clks);
+	if (ret) {
+		dev_err(dev, "failed to enable clk: %d\n", ret);
+		return ret;
+	}
+#endif
+
+	udphy_get_initial_status(udphy);
 
 	return 0;
 }

@@ -93,7 +93,7 @@ systemd-run 代执行挂盘与写网络配置),改之前先读该文件的注释
 |---|---|
 | `tools/linux/Linux_Pack_Firmware/rockdev/rk356x-nvr-package-file` | update.img 打包清单,`build.sh updateimg` 依赖 |
 | `tools/linux/Linux_Pack_Firmware/rockdev/rv1126b-package-file` | 新增,rv1126b 打包清单(暂不含 oem/userdata) |
-| `u-boot/` | 2026-09-16 整棵换为 rv1126b SDK(`rv1126b_linux6.1_release_v1.0.0_20250620`,原始包在 `/data/backup/sdk/`)的树,同为 2017.09 但含 rv1126b 支持;原先那处 drm-logo 页对齐改动上游已修(`align_size = PAGE_SIZE`),无需重打,故本目录现为纯原厂 |
+| `u-boot/` | 2026-10-23 整棵换为 Rockchip 上游 `github.com/rockchip-linux/u-boot` next-dev **锁定在 `1c535d65b8`(2026-07-28)**,不自动跟进。next-dev 是原厂开发主线(SDK 发布包即其快照),此提交未经原厂发布测试,靠本项目上板验证兜底。相对此前的 rv1126b SDK(2025-06-20)多出 A/B 修复、RK3566 访问 AHCI 卡死修复、2026-03 批量 CVE 补丁与 RV1126B 大内存/温度驱动等;旧树备份在 `/data/backup/nvr-os-uboot-rv1126bsdk-20261023/`。除 `.gitignore` 追加 `/*.bin.digest`、`/*.bin.gz` 外为纯原厂 |
 | `buildroot/fs/cpio/cpio.mk` | 一处改动 |
 | `docs/nvr-edge-integration.md` | rootfs 对下发组件承诺的 ABI 面 |
 | `docker/` | 编译环境,Dockerfile 与 run.sh,宿主机缺依赖必须走它 |

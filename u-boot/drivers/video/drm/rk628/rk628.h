@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <common.h>
 #include <dm.h>
+#include <generic-phy.h>
 #include <i2c.h>
 #include <dm/uclass.h>
 #include <dm/uclass-id.h>
@@ -17,8 +18,6 @@
 #include <linux/bitfield.h>
 #include <linux/math64.h>
 #include <drm_modes.h>
-
-#include "../rockchip_phy.h"
 
 #define DRIVER_VERSION				"0.1.0"
 #define UPDATE(x, h, l)		(((x) << (l)) & GENMASK((h), (l)))
@@ -507,6 +506,13 @@ struct rk628_hdmirx {
 	u32 input_format;
 };
 
+struct rk628_ssc {
+	u32 enable;
+	bool down_spread;
+	u32 mod_depth;
+	u32 mod_freq;
+};
+
 struct rk628 {
 	struct udevice *dev;
 	struct udevice *power_supply;
@@ -529,6 +535,7 @@ struct rk628 {
 	int sync_pol;
 	u32 version;
 	struct rk628_rgb rgb;
+	struct rk628_ssc ssc;
 };
 
 static inline bool rk628_input_is_hdmi(struct rk628 *rk628)

@@ -73,6 +73,7 @@ struct rockchip_combphy_grfcfg {
 struct rockchip_combphy_cfg {
 	const struct rockchip_combphy_grfcfg *grfcfg;
 	bool force_det_out; /* Tx detect Rx errata */
+	bool txpll_lock_dis; /* TX pll lock check disable */
 	int (*combphy_cfg)(struct rockchip_combphy_priv *priv);
 };
 
@@ -100,6 +101,7 @@ static int param_write(struct regmap *base,
 	return regmap_write(base, reg->offset, val);
 }
 
+#if !CONFIG_IS_ENABLED(ROCKUSB_MAX_SPEED_HS)
 static u32 rockchip_combphy_is_ready(struct rockchip_combphy_priv *priv)
 {
 	const struct rockchip_combphy_grfcfg *cfg = priv->cfg->grfcfg;
@@ -113,6 +115,7 @@ static u32 rockchip_combphy_is_ready(struct rockchip_combphy_priv *priv)
 
 	return val;
 }
+#endif
 
 static int rockchip_combphy_pcie_init(struct rockchip_combphy_priv *priv)
 {
@@ -131,6 +134,13 @@ static int rockchip_combphy_pcie_init(struct rockchip_combphy_priv *priv)
 		val = readl(priv->mmio + (0x19 << 2));
 		val |= BIT(5);
 		writel(val, priv->mmio + (0x19 << 2));
+	}
+
+	if (!priv->cfg->txpll_lock_dis &&
+	    dev_read_bool(priv->dev, "rockchip,ext-refclk")) {
+		ret = readl_poll_timeout(priv->mmio + (0x27 << 2), val, val & 0x1, 1000);
+		if (ret)
+			dev_err(priv->dev, "pcie phy lock failed, check input refclk\n");
 	}
 
 	return ret;
@@ -196,6 +206,7 @@ static int rockchip_combphy_sgmii_init(struct rockchip_combphy_priv *priv)
 	return ret;
 }
 
+#if !CONFIG_IS_ENABLED(ROCKUSB_MAX_SPEED_HS)
 int rockchip_combphy_usb3_uboot_init(fdt_addr_t phy_addr)
 {
 	struct udevice *udev = NULL;
@@ -255,12 +266,15 @@ int rockchip_combphy_usb3_uboot_init(fdt_addr_t phy_addr)
 
 	return ret;
 }
+#endif
 
 static int rockchip_combphy_set_mode(struct rockchip_combphy_priv *priv)
 {
+	int ret = 0;
+
 	switch (priv->mode) {
 	case PHY_TYPE_PCIE:
-		rockchip_combphy_pcie_init(priv);
+		ret = rockchip_combphy_pcie_init(priv);
 		break;
 	case PHY_TYPE_USB3:
 		rockchip_combphy_usb3_init(priv);
@@ -273,10 +287,10 @@ static int rockchip_combphy_set_mode(struct rockchip_combphy_priv *priv)
 		return rockchip_combphy_sgmii_init(priv);
 	default:
 		dev_err(priv->dev, "incompatible PHY type\n");
-		return -EINVAL;
+		ret = -EINVAL;
 	}
 
-	return 0;
+	return ret;
 }
 
 static int rockchip_combphy_init(struct phy *phy)
@@ -494,6 +508,7 @@ static const struct rockchip_combphy_grfcfg rk3528_combphy_grfcfgs = {
 static const struct rockchip_combphy_cfg rk3528_combphy_cfgs = {
 	.grfcfg		= &rk3528_combphy_grfcfgs,
 	.combphy_cfg	= rk3528_combphy_cfg,
+	.txpll_lock_dis = true,
 };
 #endif
 
@@ -883,6 +898,30 @@ static int rk3588_combphy_cfg(struct rockchip_combphy_priv *priv)
 		writel(val, priv->mmio + (0xd << 2));
 	}
 
+	if (dev_read_bool(priv->dev, "rockchip,ext-refclk")) {
+		param_write(priv->phy_grf, &cfg->pipe_clk_ext, true);
+		if (priv->mode == PHY_TYPE_PCIE) {
+			val = 0x10;
+			writel(val, priv->mmio + (0x20 << 2));
+
+			val = 0x0c;
+			writel(val, priv->mmio + (0x1b << 2));
+
+			/*
+			 * Set up su_trim: T3_P1 650mv
+			 * CKRCV termination resister adjust 11: Hi-Z
+			 */
+			val = 0x90;
+			writel(val, priv->mmio + (0xa << 2));
+			val = 0x43;
+			writel(val, priv->mmio + (0xb << 2));
+			val = 0xb8;
+			writel(val, priv->mmio + (0xc << 2));
+			val = 0x56;
+			writel(val, priv->mmio + (0xd << 2));
+		}
+	}
+
 	return 0;
 }
 
@@ -1105,6 +1144,10 @@ static int rv1126b_combphy_cfg(struct rockchip_combphy_priv *priv)
 
 		/* Set Rx squelch input filler bandwidth */
 		writel(0x0e, priv->mmio + (0x14 << 2));
+
+		/* Set Full Txswing and Txmargin 1200mV and -6dB De-emphasis */
+		regmap_write(priv->phy_grf, 0x1800c, GENMASK(18, 16) | 0x0007);
+		regmap_write(priv->phy_grf, 0x18004, GENMASK(26, 21) | 0x0100);
 
 		param_write(priv->phy_grf, &cfg->pipe_sel_usb, true);
 		param_write(priv->phy_grf, &cfg->pipe_txcomp_sel, false);

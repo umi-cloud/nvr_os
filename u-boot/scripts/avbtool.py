@@ -28,6 +28,7 @@ import argparse
 import binascii
 import bisect
 import hashlib
+import io
 import json
 import math
 import os
@@ -39,7 +40,7 @@ import time
 
 # Keep in sync with libavb/avb_version.h.
 AVB_VERSION_MAJOR = 1
-AVB_VERSION_MINOR = 2
+AVB_VERSION_MINOR = 3
 AVB_VERSION_SUB = 0
 
 # Keep in sync with libavb/avb_footer.h.
@@ -47,9 +48,30 @@ AVB_FOOTER_VERSION_MAJOR = 1
 AVB_FOOTER_VERSION_MINOR = 0
 
 AVB_VBMETA_IMAGE_FLAGS_HASHTREE_DISABLED = 1
+AVB_VBMETA_IMAGE_FLAGS_VERIFICATION_DISABLED = 2
 
 # Configuration for enabling logging of calls to avbtool.
 AVB_INVOCATION_LOGFILE = os.environ.get('AVB_INVOCATION_LOGFILE')
+
+# Known values for certificate "usage" field. These values must match the
+# libavb_cert implementation.
+#
+# The "android.things" substring is only for historical reasons; these strings
+# are used for the general-purpose libavb_cert extension and are not specific
+# to the Android Things project. However, changing them would be a breaking
+# change so it's simpler to leave them as-is.
+CERT_USAGE_SIGNING = 'com.google.android.things.vboot'
+CERT_USAGE_INTERMEDIATE_AUTHORITY = 'com.google.android.things.vboot.ca'
+CERT_USAGE_UNLOCK = 'com.google.android.things.vboot.unlock'
+CERT_USAGE_HASHES = {
+    hashlib.sha256(CERT_USAGE_SIGNING.encode('ascii')).digest():
+        CERT_USAGE_SIGNING,
+    hashlib.sha256(
+        CERT_USAGE_INTERMEDIATE_AUTHORITY.encode('ascii')).digest():
+            CERT_USAGE_INTERMEDIATE_AUTHORITY,
+    hashlib.sha256(CERT_USAGE_UNLOCK.encode('ascii')).digest():
+        CERT_USAGE_UNLOCK,
+}
 
 
 class AvbError(Exception):
@@ -930,18 +952,22 @@ class ImageHandler(object):
                                   struct.calcsize(ImageChunk.FORMAT)))
     self._read_header()
 
-  def append_raw(self, data):
+  def append_raw(self, data, multiple_block_size=True):
     """Appends a RAW chunk to the sparse file.
 
-    The length of the given data must be a multiple of the block size.
+    The length of the given data must be a multiple of the block size,
+    unless |multiple_block_size| is False.
 
     Arguments:
       data: Data to append as bytes.
+      multiple_block_size: whether to check the length of the
+        data is a multiple of the block size.
 
     Raises:
       OSError: If ImageHandler was initialized in read-only mode.
     """
-    assert len(data) % self.block_size == 0
+    if multiple_block_size:
+      assert len(data) % self.block_size == 0
 
     if self._read_only:
       raise OSError('ImageHandler is in read-only mode.')
@@ -1801,15 +1827,17 @@ class AvbChainPartitionDescriptor(AvbDescriptor):
     rollback_index_location: The rollback index location to use.
     partition_name: Partition name as string.
     public_key: The public key as bytes.
+    flags: Descriptor flags (see avb_chain_partition_descriptor.h).
   """
 
   TAG = 4
-  RESERVED = 64
-  SIZE = 28 + RESERVED
+  RESERVED = 60
+  SIZE = 32 + RESERVED
   FORMAT_STRING = ('!QQ'  # tag, num_bytes_following (descriptor header)
                    'L'    # rollback_index_location
                    'L'    # partition_name_size (bytes)
                    'L' +  # public_key_size (bytes)
+                   'L' +  # flags
                    str(RESERVED) + 's')  # reserved
 
   def __init__(self, data=None):
@@ -1827,7 +1855,8 @@ class AvbChainPartitionDescriptor(AvbDescriptor):
     if data:
       (tag, num_bytes_following, self.rollback_index_location,
        partition_name_len,
-       public_key_len, _) = struct.unpack(self.FORMAT_STRING, data[0:self.SIZE])
+       public_key_len, self.flags, _) = struct.unpack(self.FORMAT_STRING,
+                                                      data[0:self.SIZE])
       expected_size = round_to_multiple(
           self.SIZE - 16 + partition_name_len + public_key_len, 8)
       if tag != self.TAG or num_bytes_following != expected_size:
@@ -1848,6 +1877,7 @@ class AvbChainPartitionDescriptor(AvbDescriptor):
       self.rollback_index_location = 0
       self.partition_name = ''
       self.public_key = b''
+      self.flags = 0
 
   def print_desc(self, o):
     """Print the descriptor.
@@ -1862,6 +1892,7 @@ class AvbChainPartitionDescriptor(AvbDescriptor):
     # Just show the SHA1 of the key, for size reasons.
     pubkey_digest = hashlib.sha1(self.public_key).hexdigest()
     o.write('      Public key (sha1):       {}\n'.format(pubkey_digest))
+    o.write('      Flags:                   {}\n'.format(self.flags))
 
   def encode(self):
     """Serializes the descriptor.
@@ -1877,7 +1908,7 @@ class AvbChainPartitionDescriptor(AvbDescriptor):
     desc = struct.pack(self.FORMAT_STRING, self.TAG, nbf_with_padding,
                        self.rollback_index_location,
                        len(partition_name_encoded), len(self.public_key),
-                       self.RESERVED * b'\0')
+                       self.flags, self.RESERVED * b'\0')
     ret = desc + partition_name_encoded + self.public_key + padding_size * b'\0'
     return ret
 
@@ -2403,13 +2434,14 @@ class Avb(object):
     misc_image.seek(self.AB_MISC_METADATA_OFFSET)
     misc_image.write(ab_data)
 
-  def info_image(self, image_filename, output, atx):
+  def info_image(self, image_filename, output, cert, output_pubkey=None):
     """Implements the 'info_image' command.
 
     Arguments:
       image_filename: Image file to get information from (file object).
       output: Output file to write human-readable information to (file object).
-      atx: If True, show information about Android Things eXtension (ATX).
+      cert: If True, show information about the avb_cert certificates.
+      output_pubkey: Optional file to write the public key to (file object).
     """
     image = ImageHandler(image_filename, read_only=True)
     o = output
@@ -2446,6 +2478,10 @@ class Avb(object):
     if key_blob:
       hexdig = hashlib.sha1(key_blob).hexdigest()
       o.write('Public key (sha1):        {}\n'.format(hexdig))
+      o.write('Public key:               {}\n'.format(key_blob.hex()))
+      if output_pubkey is not None:
+        output_pubkey.write(key_blob)
+
     o.write('Algorithm:                {}\n'.format(alg_name))
     o.write('Rollback Index:           {}\n'.format(header.rollback_index))
     o.write('Flags:                    {}\n'.format(header.flags))
@@ -2462,8 +2498,8 @@ class Avb(object):
     if num_printed == 0:
       o.write('    (none)\n')
 
-    if atx and header.public_key_metadata_size:
-      o.write('Android Things eXtension (ATX):\n')
+    if cert and header.public_key_metadata_size:
+      o.write('avb_cert certificate:\n')
       key_metadata_offset = (header.SIZE +
                              header.authentication_data_block_size +
                              header.public_key_metadata_offset)
@@ -2472,7 +2508,7 @@ class Avb(object):
       version, pik, psk = struct.unpack('<I1620s1620s', key_metadata_blob)
       o.write('    Metadata version:        {}\n'.format(version))
 
-      def print_atx_certificate(cert):
+      def print_certificate(cert):
         version, public_key, subject, usage, key_version, _ = (
             struct.unpack('<I1032s32s32sQ512s', cert))
         o.write('      Version:               {}\n'.format(version))
@@ -2483,9 +2519,9 @@ class Avb(object):
         o.write('      Key version:           {}\n'.format(key_version))
 
       o.write('    Product Intermediate Key:\n')
-      print_atx_certificate(pik)
+      print_certificate(pik)
       o.write('    Product Signing Key:\n')
-      print_atx_certificate(psk)
+      print_certificate(psk)
 
   def verify_image(self, image_filename, key_path, expected_chain_partitions,
                    follow_chain_partitions, accept_zeroed_hashtree):
@@ -2904,7 +2940,8 @@ class Avb(object):
 
     return self._get_cmdline_descriptors_for_hashtree_descriptor(ht)
 
-  def make_vbmeta_image(self, output, chain_partitions, algorithm_name,
+  def make_vbmeta_image(self, output, chain_partitions_use_ab,
+                        chain_partitions_do_not_use_ab, algorithm_name,
                         key_path, public_key_metadata_path, rollback_index,
                         flags, rollback_index_location,
                         props, props_from_file, kernel_cmdlines,
@@ -2920,7 +2957,8 @@ class Avb(object):
 
     Arguments:
       output: File to write the image to.
-      chain_partitions: List of partitions to chain or None.
+      chain_partitions_use_ab: List of partitions to chain or None.
+      chain_partitions_do_not_use_ab: List of partitions to chain which does not use A/B or None.
       algorithm_name: Name of algorithm to use.
       key_path: Path to key to use or None.
       public_key_metadata_path: Path to public key metadata or None.
@@ -2946,6 +2984,8 @@ class Avb(object):
     tmp_header = AvbVBMetaHeader()
     if rollback_index_location > 0:
       tmp_header.bump_required_libavb_version_minor(2)
+    if chain_partitions_do_not_use_ab:
+      tmp_header.bump_required_libavb_version_minor(3)
     if include_descriptors_from_image:
       # Use the bump logic in AvbVBMetaHeader to calculate the max required
       # version of all included descriptors.
@@ -2966,8 +3006,8 @@ class Avb(object):
     ht_desc_to_setup = None
     vbmeta_blob = self._generate_vbmeta_blob(
         algorithm_name, key_path, public_key_metadata_path, descriptors,
-        chain_partitions, rollback_index, flags, rollback_index_location,
-        props, props_from_file,
+        chain_partitions_use_ab, chain_partitions_do_not_use_ab,
+        rollback_index, flags, rollback_index_location, props, props_from_file,
         kernel_cmdlines, setup_rootfs_from_kernel, ht_desc_to_setup,
         include_descriptors_from_image, signing_helper,
         signing_helper_with_files, release_string,
@@ -2984,7 +3024,7 @@ class Avb(object):
 
   def _generate_vbmeta_blob(self, algorithm_name, key_path,
                             public_key_metadata_path, descriptors,
-                            chain_partitions,
+                            chain_partitions_use_ab, chain_partitions_do_not_use_ab,
                             rollback_index, flags, rollback_index_location,
                             props, props_from_file,
                             kernel_cmdlines,
@@ -3009,7 +3049,8 @@ class Avb(object):
       key_path: The path to the .pem file used to sign the blob.
       public_key_metadata_path: Path to public key metadata or None.
       descriptors: A list of descriptors to insert or None.
-      chain_partitions: List of partitions to chain or None.
+      chain_partitions_use_ab: List of partitions to chain with A/B or None.
+      chain_partitions_do_not_use_ab: List of partitions to chain without A/B or None
       rollback_index: The rollback index to use.
       flags: Flags to use in the image.
       rollback_index_location: Location of the main vbmeta rollback index.
@@ -3049,9 +3090,15 @@ class Avb(object):
     h.bump_required_libavb_version_minor(required_libavb_version_minor)
 
     # Insert chained partition descriptors, if any
-    if chain_partitions:
+    all_chain_partitions = []
+    if chain_partitions_use_ab:
+      all_chain_partitions.extend(chain_partitions_use_ab)
+    if chain_partitions_do_not_use_ab:
+      all_chain_partitions.extend(chain_partitions_do_not_use_ab)
+
+    if len(all_chain_partitions) > 0:
       used_locations = {rollback_index_location: True}
-      for cp in chain_partitions:
+      for cp in all_chain_partitions:
         cp_tokens = cp.split(':')
         if len(cp_tokens) != 3:
           raise AvbError('Malformed chained partition "{}".'.format(cp))
@@ -3071,6 +3118,8 @@ class Avb(object):
           raise AvbError('Rollback index location must be 1 or larger.')
         with open(file_path, 'rb') as f:
           desc.public_key = f.read()
+        if chain_partitions_do_not_use_ab and (cp in chain_partitions_do_not_use_ab):
+          desc.flags |= 1
         descriptors.append(desc)
 
     # Descriptors.
@@ -3247,6 +3296,20 @@ class Avb(object):
     """
     output.write(RSAPublicKey(key_path).encode())
 
+  def extract_public_key_digest(self, key_path, output):
+    """Implements the 'extract_public_key_digest' command.
+
+    Arguments:
+      key_path: The path to a RSA private key file.
+      output: The file to write to.
+
+    Raises:
+      AvbError: If the public key could not be extracted.
+    """
+    hasher = hashlib.sha256()
+    hasher.update(RSAPublicKey(key_path).encode())
+    output.write(hasher.hexdigest())
+
   def append_vbmeta_image(self, image_filename, vbmeta_image_filename,
                           partition_size):
     """Implementation of the append_vbmeta_image command.
@@ -3331,8 +3394,9 @@ class Avb(object):
 
   def add_hash_footer(self, image_filename, partition_size,
                       dynamic_partition_size, partition_name,
-                      hash_algorithm, salt, chain_partitions, algorithm_name,
-                      key_path,
+                      hash_algorithm, salt, chain_partitions_use_ab,
+                      chain_partitions_do_not_use_ab,
+                      algorithm_name, key_path,
                       public_key_metadata_path, rollback_index, flags,
                       rollback_index_location, props,
                       props_from_file, kernel_cmdlines,
@@ -3352,7 +3416,8 @@ class Avb(object):
       partition_name: Name of partition (without A/B suffix).
       hash_algorithm: Hash algorithm to use.
       salt: Salt to use as a hexadecimal string or None to use /dev/urandom.
-      chain_partitions: List of partitions to chain.
+      chain_partitions_use_ab: List of partitions to chain with A/B or None.
+      chain_partitions_do_not_use_ab: List of partitions to chain without A/B or None.
       algorithm_name: Name of algorithm to use.
       key_path: Path to key to use or None.
       public_key_metadata_path: Path to public key metadata or None.
@@ -3395,6 +3460,8 @@ class Avb(object):
       required_libavb_version_minor = 1
     if rollback_index_location > 0:
       required_libavb_version_minor = 2
+    if chain_partitions_do_not_use_ab:
+      required_libavb_version_minor = 3
 
     # If we're asked to calculate minimum required libavb version, we're done.
     if print_required_libavb_version:
@@ -3415,7 +3482,10 @@ class Avb(object):
       print('{}'.format(partition_size - max_metadata_size))
       return
 
-    image = ImageHandler(image_filename)
+    # If we aren't appending the vbmeta footer to the input image we can
+    # open it in read-only mode.
+    image = ImageHandler(image_filename,
+                         read_only=do_not_append_vbmeta_image)
 
     # If there's already a footer, truncate the image to its original
     # size. This way 'avbtool add_hash_footer' is idempotent (modulo
@@ -3489,8 +3559,8 @@ class Avb(object):
       ht_desc_to_setup = None
       vbmeta_blob = self._generate_vbmeta_blob(
           algorithm_name, key_path, public_key_metadata_path, [h_desc],
-          chain_partitions, rollback_index, flags, rollback_index_location,
-          props, props_from_file,
+          chain_partitions_use_ab, chain_partitions_do_not_use_ab, rollback_index,
+          flags, rollback_index_location, props, props_from_file,
           kernel_cmdlines, setup_rootfs_from_kernel, ht_desc_to_setup,
           include_descriptors_from_image, signing_helper,
           signing_helper_with_files, release_string,
@@ -3544,12 +3614,13 @@ class Avb(object):
       image.truncate(original_image_size)
       raise AvbError('Adding hash_footer failed: {}.'.format(e)) from e
 
-  def add_hashtree_footer(self, image_filename, partition_size, partition_name,
+  def add_hashtree_footer(self, image_filename, partition_size: int, partition_name,
                           generate_fec, fec_num_roots, hash_algorithm,
-                          block_size, salt, chain_partitions, algorithm_name,
-                          key_path,
+                          block_size, salt, chain_partitions_use_ab,
+                          chain_partitions_do_not_use_ab,
+                          algorithm_name, key_path,
                           public_key_metadata_path, rollback_index, flags,
-                          rollback_index_location,
+                          rollback_index_location: int,
                           props, props_from_file, kernel_cmdlines,
                           setup_rootfs_from_kernel,
                           setup_as_rootfs_from_kernel,
@@ -3575,7 +3646,8 @@ class Avb(object):
       hash_algorithm: Hash algorithm to use.
       block_size: Block size to use.
       salt: Salt to use as a hexadecimal string or None to use /dev/urandom.
-      chain_partitions: List of partitions to chain.
+      chain_partitions_use_ab: List of partitions to chain.
+      chain_partitions_do_not_use_ab: List of partitions to chain without A/B or None.
       algorithm_name: Name of algorithm to use.
       key_path: Path to key to use or None.
       public_key_metadata_path: Path to public key metadata or None.
@@ -3616,6 +3688,8 @@ class Avb(object):
       required_libavb_version_minor = 1
     if rollback_index_location > 0:
       required_libavb_version_minor = 2
+    if chain_partitions_do_not_use_ab:
+      required_libavb_version_minor = 3
 
     # If we're asked to calculate minimum required libavb version, we're done.
     if print_required_libavb_version:
@@ -3684,7 +3758,12 @@ class Avb(object):
       # Ensure image is multiple of block_size.
       rounded_image_size = round_to_multiple(image.image_size, block_size)
       if rounded_image_size > image.image_size:
-        image.append_raw('\0' * (rounded_image_size - image.image_size))
+        # If we need to round up the image size, it means the length of the
+        # data to append is not a multiple of block size.
+        # Setting multiple_block_size to false, so append_raw() will not
+        # require it.
+        image.append_raw(b'\0' * (rounded_image_size - image.image_size),
+                         multiple_block_size=False)
 
       # If image size exceeds the maximum image size, fail.
       if partition_size > 0:
@@ -3753,7 +3832,8 @@ class Avb(object):
       padding_needed = (round_to_multiple(len(hash_tree), image.block_size) -
                         len(hash_tree))
       hash_tree_with_padding = hash_tree + b'\0' * padding_needed
-      image.append_raw(hash_tree_with_padding)
+      if len(hash_tree_with_padding) > 0:
+        image.append_raw(hash_tree_with_padding)
       len_hashtree_and_fec = len(hash_tree_with_padding)
 
       # Generate FEC codes, if requested.
@@ -3781,7 +3861,8 @@ class Avb(object):
       vbmeta_offset = tree_offset + len_hashtree_and_fec
       vbmeta_blob = self._generate_vbmeta_blob(
           algorithm_name, key_path, public_key_metadata_path, [ht_desc],
-          chain_partitions, rollback_index, flags, rollback_index_location,
+          chain_partitions_use_ab, chain_partitions_do_not_use_ab,
+          rollback_index, flags, rollback_index_location,
           props, props_from_file,
           kernel_cmdlines, setup_rootfs_from_kernel, ht_desc_to_setup,
           include_descriptors_from_image, signing_helper,
@@ -3822,16 +3903,15 @@ class Avb(object):
       image.truncate(original_image_size)
       raise AvbError('Adding hashtree_footer failed: {}.'.format(e)) from e
 
-  def make_atx_certificate(self, output, authority_key_path, subject_key_path,
-                           subject_key_version, subject,
-                           is_intermediate_authority, usage, signing_helper,
-                           signing_helper_with_files):
-    """Implements the 'make_atx_certificate' command.
+  def make_certificate(self, output, authority_key_path, subject_key_path,
+                       subject_key_version, subject, usage,
+                       signing_helper, signing_helper_with_files):
+    """Implements the 'make_certificate' command.
 
-    Android Things certificates are required for Android Things public key
-    metadata. They chain the vbmeta signing key for a particular product back to
-    a fused, permanent root key. These certificates are fixed-length and fixed-
-    format with the explicit goal of not parsing ASN.1 in bootloader code.
+    Certificates are required for avb_cert extension public key metadata. They
+    chain the vbmeta signing key for a particular product back to a fused,
+    permanent root key. These certificates are fixed-length and fixed-format
+    with the explicit goal of not parsing ASN.1 in bootloader code.
 
     Arguments:
       output: Certificate will be written to this file on success.
@@ -3844,9 +3924,7 @@ class Avb(object):
                            of seconds since the epoch is used.
       subject: A subject identifier. For Product Signing Key certificates this
                should be the same Product ID found in the permanent attributes.
-      is_intermediate_authority: True if the certificate is for an intermediate
-                                 authority.
-      usage: If not empty, overrides the cert usage with a hash of this value.
+      usage: Usage string whose SHA256 hash will be embedded in the certificate.
       signing_helper: Program which signs a hash and returns the signature.
       signing_helper_with_files: Same as signing_helper but uses files instead.
 
@@ -3859,10 +3937,6 @@ class Avb(object):
     hasher = hashlib.sha256()
     hasher.update(subject)
     signed_data.extend(hasher.digest())
-    if not usage:
-      usage = 'com.google.android.things.vboot'
-      if is_intermediate_authority:
-        usage += '.ca'
     hasher = hashlib.sha256()
     hasher.update(usage.encode('ascii'))
     signed_data.extend(hasher.digest())
@@ -3878,11 +3952,11 @@ class Avb(object):
     output.write(signed_data)
     output.write(signature)
 
-  def make_atx_permanent_attributes(self, output, root_authority_key_path,
-                                    product_id):
-    """Implements the 'make_atx_permanent_attributes' command.
+  def make_cert_permanent_attributes(self, output, root_authority_key_path,
+                                     product_id):
+    """Implements the 'make_cert_permanent_attributes' command.
 
-    Android Things permanent attributes are designed to be permanent for a
+    avb_cert permanent attributes are designed to be permanent for a
     particular product and a hash of these attributes should be fused into
     hardware to enforce this.
 
@@ -3902,22 +3976,242 @@ class Avb(object):
     output.write(RSAPublicKey(root_authority_key_path).encode())
     output.write(product_id)
 
-  def make_atx_metadata(self, output, intermediate_key_certificate,
-                        product_key_certificate):
-    """Implements the 'make_atx_metadata' command.
+  def info_cert_permanent_attributes(self, input_file, output):
+    """Dumps avb_cert permanent attributes in human-readable form.
 
-    Android Things metadata are included in vbmeta images to facilitate
+    Arguments:
+      input_file: File object containing permanent attributes.
+      output: Output stream for human-readable information.
+
+    Raises:
+      AvbError: If the input data is malformed.
+    """
+    data = input_file.read()
+    if len(data) < 4 + 8 + 16:
+      raise AvbError('Input is too small to be cert permanent attributes.')
+
+    format_version = struct.unpack_from('<I', data, 0)[0]
+    num_bits, n0inv = struct.unpack_from('!II', data, 4)
+    if num_bits == 0 or (num_bits % 8) != 0:
+      raise AvbError('Invalid RSA key size in permanent attributes.')
+
+    key_num_bytes = num_bits // 8
+    expected_size = 4 + 8 + key_num_bytes + key_num_bytes + 16
+    if len(data) != expected_size:
+      raise AvbError(
+          'Invalid permanent attributes size {} (expected {}).'.format(
+              len(data), expected_size))
+
+    modulus_offset = 12
+    rr_offset = modulus_offset + key_num_bytes
+    product_id_offset = rr_offset + key_num_bytes
+    modulus = data[modulus_offset:rr_offset]
+    rrmodn = data[rr_offset:product_id_offset]
+    product_id = data[product_id_offset:product_id_offset + 16]
+
+    output.write('Minimum libavb version:   1.0\n')
+    output.write('Header Block:             4 bytes\n')
+    output.write('Public key Block:         {} bytes\n'.format(8 + 2 * key_num_bytes))
+    output.write('Product ID Block:         16 bytes\n')
+    output.write('Attributes Block:         {} bytes\n'.format(len(data)))
+    output.write('\n')
+    output.write('Permanent Attributes:\n')
+    output.write('  Format Version:         {}\n'.format(format_version))
+    output.write('  RSA Key Num Bits:       {}\n'.format(num_bits))
+    output.write('  RSA n0inv:              0x{:08x}\n'.format(n0inv))
+    output.write('  RSA Modulus:            {}\n'.format(modulus.hex()))
+    output.write('  RSA RRModN:             {}\n'.format(rrmodn.hex()))
+    output.write('  Product ID (hex):       {}\n'.format(product_id.hex()))
+    try:
+      product_id_ascii = product_id.decode('ascii')
+      output.write('  Product ID (ascii):     {}\n'.format(product_id_ascii))
+    except UnicodeDecodeError:
+      output.write('  Product ID (ascii):     <non-ascii>\n')
+
+  def info_certificate(self, input_file, output):
+    """Dumps avb_cert certificate in human-readable form.
+
+    Arguments:
+      input_file: File object containing certificate data.
+      output: Output stream for human-readable information.
+
+    Raises:
+      AvbError: If the input data is malformed.
+    """
+    data = input_file.read()
+    digest_num_bytes = hashlib.sha256().digest_size
+    key_block_num_bytes = ALGORITHMS['SHA256_RSA4096'].public_key_num_bytes
+    signature_num_bytes = ALGORITHMS['SHA512_RSA4096'].signature_num_bytes
+    signed_data_num_bytes = 4 + key_block_num_bytes + digest_num_bytes * 2 + 8
+    expected_size = signed_data_num_bytes + signature_num_bytes
+    if len(data) != expected_size:
+      raise AvbError('Invalid certificate size {} (expected {}).'.format(
+          len(data), expected_size))
+
+    format_version = struct.unpack_from('<I', data, 0)[0]
+    num_bits, n0inv = struct.unpack_from('!II', data, 4)
+    if num_bits == 0 or (num_bits % 8) != 0:
+      raise AvbError('Invalid RSA key size in certificate.')
+
+    key_num_bytes = num_bits // 8
+    if 8 + 2 * key_num_bytes != key_block_num_bytes:
+      raise AvbError('Invalid RSA key block size in certificate.')
+
+    modulus_offset = 12
+    rr_offset = modulus_offset + key_num_bytes
+    subject_offset = 4 + key_block_num_bytes
+    usage_offset = subject_offset + digest_num_bytes
+    key_version_offset = usage_offset + digest_num_bytes
+    signature_offset = signed_data_num_bytes
+
+    modulus = data[modulus_offset:rr_offset]
+    rrmodn = data[rr_offset:subject_offset]
+    subject = data[subject_offset:usage_offset]
+    usage = data[usage_offset:key_version_offset]
+    key_version = struct.unpack_from('<Q', data, key_version_offset)[0]
+    signature = data[signature_offset:]
+
+    output.write('Minimum libavb version:   1.0\n')
+    output.write('Header Block:             4 bytes\n')
+    output.write('Public key Block:         {} bytes\n'.format(
+        key_block_num_bytes))
+    output.write('Subject Block:            {} bytes\n'.format(
+        digest_num_bytes))
+    output.write('Usage Block:              {} bytes\n'.format(
+        digest_num_bytes))
+    output.write('Key Version Block:        8 bytes\n')
+    output.write('Signature Block:          {} bytes\n'.format(
+        signature_num_bytes))
+    output.write('Certificate Block:        {} bytes\n'.format(len(data)))
+    output.write('\n')
+    output.write('Certificate:\n')
+    output.write('  Format Version:         {}\n'.format(format_version))
+    output.write('  RSA Key Num Bits:       {}\n'.format(num_bits))
+    output.write('  RSA n0inv:              0x{:08x}\n'.format(n0inv))
+    output.write('  RSA Modulus:            {}\n'.format(modulus.hex()))
+    output.write('  RSA RRModN:             {}\n'.format(rrmodn.hex()))
+    output.write('  Subject (SHA256):       {}\n'.format(subject.hex()))
+    output.write('  Usage (SHA256):         {}\n'.format(usage.hex()))
+    usage_name = CERT_USAGE_HASHES.get(usage)
+    output.write('  Usage (known):          {}\n'.format(
+        usage_name if usage_name else '<unknown>'))
+    output.write('  Key Version:            {}\n'.format(key_version))
+    output.write('  Signature:              {}\n'.format(signature.hex()))
+
+  def info_cert_metadata(self, input_file, output):
+    """Dumps avb_cert metadata in human-readable form.
+
+    Arguments:
+      input_file: File object containing metadata data.
+      output: Output stream for human-readable information.
+
+    Raises:
+      AvbError: If the input data is malformed.
+    """
+    data = input_file.read()
+    certificate_num_bytes = (
+        4 +
+        ALGORITHMS['SHA256_RSA4096'].public_key_num_bytes +
+        hashlib.sha256().digest_size * 2 +
+        8 +
+        ALGORITHMS['SHA512_RSA4096'].signature_num_bytes)
+    expected_size = 4 + certificate_num_bytes * 2
+    if len(data) != expected_size:
+      raise AvbError('Invalid cert metadata size {} (expected {}).'.format(
+          len(data), expected_size))
+
+    format_version = struct.unpack_from('<I', data, 0)[0]
+    pik_offset = 4
+    psk_offset = pik_offset + certificate_num_bytes
+
+    output.write('Minimum libavb version:   1.0\n')
+    output.write('Header Block:             4 bytes\n')
+    output.write('PIK Certificate Block:    {} bytes\n'.format(
+        certificate_num_bytes))
+    output.write('PSK Certificate Block:    {} bytes\n'.format(
+        certificate_num_bytes))
+    output.write('Metadata Block:           {} bytes\n'.format(len(data)))
+    output.write('\n')
+    output.write('Public Key Metadata:\n')
+    output.write('  Format Version:         {}\n'.format(format_version))
+    output.write('\n')
+    output.write('Product Intermediate Key Certificate:\n')
+    self.info_certificate(io.BytesIO(
+        data[pik_offset:pik_offset + certificate_num_bytes]), output)
+    output.write('\n')
+    output.write('Product Signing Key Certificate:\n')
+    self.info_certificate(io.BytesIO(
+        data[psk_offset:psk_offset + certificate_num_bytes]), output)
+
+  def info_cert_unlock_credential(self, input_file, output):
+    """Dumps avb_cert unlock credential in human-readable form.
+
+    Arguments:
+      input_file: File object containing unlock credential data.
+      output: Output stream for human-readable information.
+
+    Raises:
+      AvbError: If the input data is malformed.
+    """
+    data = input_file.read()
+    certificate_num_bytes = (
+        4 +
+        ALGORITHMS['SHA256_RSA4096'].public_key_num_bytes +
+        hashlib.sha256().digest_size * 2 +
+        8 +
+        ALGORITHMS['SHA512_RSA4096'].signature_num_bytes)
+    signature_num_bytes = ALGORITHMS['SHA512_RSA4096'].signature_num_bytes
+    expected_size = 4 + certificate_num_bytes * 2 + signature_num_bytes
+    if len(data) != expected_size:
+      raise AvbError(
+          'Invalid unlock credential size {} (expected {}).'.format(
+              len(data), expected_size))
+
+    format_version = struct.unpack_from('<I', data, 0)[0]
+    pik_offset = 4
+    puk_offset = pik_offset + certificate_num_bytes
+    challenge_signature_offset = puk_offset + certificate_num_bytes
+    challenge_signature = data[challenge_signature_offset:]
+
+    output.write('Minimum libavb version:   1.0\n')
+    output.write('Header Block:             4 bytes\n')
+    output.write('PIK Certificate Block:    {} bytes\n'.format(
+        certificate_num_bytes))
+    output.write('PUK Certificate Block:    {} bytes\n'.format(
+        certificate_num_bytes))
+    output.write('Challenge Sig Block:      {} bytes\n'.format(
+        signature_num_bytes))
+    output.write('Unlock Credential Block:  {} bytes\n'.format(len(data)))
+    output.write('\n')
+    output.write('Unlock Credential:\n')
+    output.write('  Format Version:         {}\n'.format(format_version))
+    output.write('  Challenge Signature:    {}\n'.format(
+        challenge_signature.hex()))
+    output.write('\n')
+    output.write('Product Intermediate Key Certificate:\n')
+    self.info_certificate(io.BytesIO(
+        data[pik_offset:pik_offset + certificate_num_bytes]), output)
+    output.write('\n')
+    output.write('Product Unlock Key Certificate:\n')
+    self.info_certificate(io.BytesIO(
+        data[puk_offset:puk_offset + certificate_num_bytes]), output)
+
+  def make_cert_metadata(self, output, intermediate_key_certificate,
+                         product_key_certificate):
+    """Implements the 'make_cert_metadata' command.
+
+    avb_cert metadata are included in vbmeta images to facilitate
     verification. The output of this command can be used as the
     public_key_metadata argument to other commands.
 
     Arguments:
       output: Metadata will be written to this file on success.
       intermediate_key_certificate: A certificate file as output by
-                                    make_atx_certificate with
-                                    is_intermediate_authority set to true.
+                                    make_certificate with usage set to
+                                    CERT_USAGE_INTERMEDIATE_AUTHORITY.
       product_key_certificate: A certificate file as output by
-                               make_atx_certificate with
-                               is_intermediate_authority set to false.
+                               make_certificate with usage set to
+                               CERT_USAGE_SIGNING.
 
     Raises:
       AvbError: If an argument is incorrect.
@@ -3931,14 +4225,14 @@ class Avb(object):
     output.write(intermediate_key_certificate)
     output.write(product_key_certificate)
 
-  def make_atx_unlock_credential(self, output, intermediate_key_certificate,
-                                 unlock_key_certificate, challenge_path,
-                                 unlock_key_path, signing_helper,
-                                 signing_helper_with_files):
-    """Implements the 'make_atx_unlock_credential' command.
+  def make_cert_unlock_credential(self, output, intermediate_key_certificate,
+                                  unlock_key_certificate, challenge_path,
+                                  unlock_key_path, signing_helper,
+                                  signing_helper_with_files):
+    """Implements the 'make_cert_unlock_credential' command.
 
-    Android Things unlock credentials can be used to authorize the unlock of AVB
-    on a device. These credentials are presented to an Android Things bootloader
+    avb_cert unlock credentials can be used to authorize the unlock of AVB
+    on a device. These credentials are presented to an avb_cert bootloader
     via the fastboot interface in response to a 16-byte challenge. This method
     creates all fields of the credential except the challenge signature field
     (which is the last field) and can optionally create the challenge signature
@@ -3947,13 +4241,11 @@ class Avb(object):
     Arguments:
       output: The credential will be written to this file on success.
       intermediate_key_certificate: A certificate file as output by
-                                    make_atx_certificate with
-                                    is_intermediate_authority set to true.
+                                    make_certificate with usage set to
+                                    CERT_USAGE_INTERMEDIATE_AUTHORITY.
       unlock_key_certificate: A certificate file as output by
-                              make_atx_certificate with
-                              is_intermediate_authority set to false and the
-                              usage set to
-                              'com.google.android.things.vboot.unlock'.
+                              make_certificate with usage set to
+                              CERT_USAGE_UNLOCK.
       challenge_path: [optional] A path to the challenge to sign.
       unlock_key_path: [optional] A PEM file path with the unlock private key.
       signing_helper: Program which signs a hash and returns the signature.
@@ -4240,12 +4532,20 @@ class AvbTool(object):
                             help='Allow signed integrity-data for partition',
                             metavar='PART_NAME:ROLLBACK_SLOT:KEY_PATH',
                             action='append')
+    sub_parser.add_argument('--chain_partition_do_not_use_ab',
+                            help='Allow signed integrity-data for partition does not use A/B',
+                            metavar='PART_NAME:ROLLBACK_SLOT:KEY_PATH',
+                            action='append',
+                            required=False)
     sub_parser.add_argument('--flags',
                             help='VBMeta flags',
                             type=parse_number,
                             default=0)
     sub_parser.add_argument('--set_hashtree_disabled_flag',
                             help='Set the HASHTREE_DISABLED flag',
+                            action='store_true')
+    sub_parser.add_argument('--set_verification_disabled_flag',
+                            help='Set the VERIFICATION_DISABLED flag',
                             action='store_true')
 
   def _add_common_footer_args(self, sub_parser):
@@ -4278,6 +4578,8 @@ class AvbTool(object):
     """
     if args.set_hashtree_disabled_flag:
       args.flags |= AVB_VBMETA_IMAGE_FLAGS_HASHTREE_DISABLED
+    if args.set_verification_disabled_flag:
+      args.flags |= AVB_VBMETA_IMAGE_FLAGS_VERIFICATION_DISABLED
     return args
 
   def run(self, argv):
@@ -4322,6 +4624,17 @@ class AvbTool(object):
                             required=True)
     sub_parser.set_defaults(func=self.extract_public_key)
 
+    sub_parser = subparsers.add_parser('extract_public_key_digest',
+                                       help='Extract SHA-256 digest of public key.')
+    sub_parser.add_argument('--key',
+                            help='Path to RSA private key file',
+                            required=True)
+    sub_parser.add_argument('--output',
+                            help='Output file name',
+                            type=argparse.FileType('w', encoding='UTF-8'),
+                            required=True)
+    sub_parser.set_defaults(func=self.extract_public_key_digest)
+
     sub_parser = subparsers.add_parser('make_vbmeta_image',
                                        help='Makes a vbmeta image.')
     sub_parser.add_argument('--output',
@@ -4340,8 +4653,7 @@ class AvbTool(object):
     sub_parser = subparsers.add_parser('add_hash_footer',
                                        help='Add hashes and footer to image.')
     sub_parser.add_argument('--image',
-                            help='Image to add hashes to',
-                            type=argparse.FileType('rb+'))
+                            help='Image to add hashes to')
     sub_parser.add_argument('--partition_size',
                             help='Partition size',
                             type=parse_number)
@@ -4400,9 +4712,14 @@ class AvbTool(object):
     sub_parser.add_argument('--partition_name',
                             help='Partition name',
                             default='')
+    # For backwards compatibility, add_hashtree_footer defaults to sha1, even
+    # though sha1 is not actually allowed to be used in Android. At the earliest
+    # opportunity, the default should be fixed to be sha256. For now we just
+    # print a warning when the algorithm defaults to sha1. Below uses default=''
+    # so that defaulted sha1 can be distinguished from explicit sha1.
     sub_parser.add_argument('--hash_algorithm',
                             help='Hash algorithm to use (default: sha1)',
-                            default='sha1')
+                            default='')
     sub_parser.add_argument('--salt',
                             help='Salt in hex (default: /dev/urandom)')
     sub_parser.add_argument('--block_size',
@@ -4515,10 +4832,14 @@ class AvbTool(object):
                             help='Write info to file',
                             type=argparse.FileType('wt'),
                             default=sys.stdout)
-    sub_parser.add_argument('--atx',
-                            help=('Show information about Android Things '
-                                  'eXtension (ATX).'),
+    sub_parser.add_argument('--cert', '--atx',
+                            help=('Show information about the avb_cert '
+                                  'extension certificate.'),
                             action='store_true')
+    sub_parser.add_argument('--output_pubkey',
+                            help='Write public key to file',
+                            type=argparse.FileType('wb'),
+                            required=False)
     sub_parser.set_defaults(func=self.info_image)
 
     sub_parser = subparsers.add_parser(
@@ -4612,8 +4933,9 @@ class AvbTool(object):
     sub_parser.set_defaults(func=self.set_ab_metadata)
 
     sub_parser = subparsers.add_parser(
-        'make_atx_certificate',
-        help='Create an Android Things eXtension (ATX) certificate.')
+        'make_certificate',
+        aliases=['make_atx_certificate'],
+        help='Create an avb_cert extension certificate.')
     sub_parser.add_argument('--output',
                             help='Write certificate to file',
                             type=argparse.FileType('wb'),
@@ -4630,14 +4952,25 @@ class AvbTool(object):
                             help=('Version of the subject key'),
                             type=parse_number,
                             required=False)
-    sub_parser.add_argument('--subject_is_intermediate_authority',
-                            help=('Generate an intermediate authority '
-                                  'certificate'),
-                            action='store_true')
-    sub_parser.add_argument('--usage',
-                            help=('Override usage with a hash of the provided '
-                                  'string'),
-                            required=False)
+    # We have 3 different usage modifying args for convenience, at most one of
+    # which can be provided since they all set the same usage field.
+    usage_group = sub_parser.add_mutually_exclusive_group(required=False)
+    usage_group.add_argument('--subject_is_intermediate_authority',
+                             help=('Override usage with the value used for '
+                                   'an intermediate authority'),
+                             action='store_const',
+                             const=CERT_USAGE_INTERMEDIATE_AUTHORITY,
+                             required=False)
+    usage_group.add_argument('--usage',
+                             help=('Override usage with a hash of the provided '
+                                   'string'),
+                             required=False),
+    usage_group.add_argument('--usage_for_unlock',
+                             help=('Override usage with the value used for '
+                                   'authenticated unlock'),
+                             action='store_const',
+                             const=CERT_USAGE_UNLOCK,
+                             required=False),
     sub_parser.add_argument('--authority_key',
                             help='Path to authority RSA private key file',
                             required=False)
@@ -4651,11 +4984,12 @@ class AvbTool(object):
                             metavar='APP',
                             default=None,
                             required=False)
-    sub_parser.set_defaults(func=self.make_atx_certificate)
+    sub_parser.set_defaults(func=self.make_certificate)
 
     sub_parser = subparsers.add_parser(
-        'make_atx_permanent_attributes',
-        help='Create Android Things eXtension (ATX) permanent attributes.')
+        'make_cert_permanent_attributes',
+        aliases=['make_atx_permanent_attributes'],
+        help='Create avb_cert extension permanent attributes.')
     sub_parser.add_argument('--output',
                             help='Write attributes to file',
                             type=argparse.FileType('wb'),
@@ -4668,11 +5002,54 @@ class AvbTool(object):
                             help=('Path to Product ID file'),
                             type=argparse.FileType('rb'),
                             required=True)
-    sub_parser.set_defaults(func=self.make_atx_permanent_attributes)
+    sub_parser.set_defaults(func=self.make_cert_permanent_attributes)
 
     sub_parser = subparsers.add_parser(
-        'make_atx_metadata',
-        help='Create Android Things eXtension (ATX) metadata.')
+        'info_cert_permanent_attributes',
+        aliases=['info_atx_permanent_attributes'],
+        help='Show avb_cert extension permanent attributes.')
+    sub_parser.add_argument('--input',
+                            help='Path to permanent attributes file',
+                            type=argparse.FileType('rb'),
+                            required=True)
+    sub_parser.add_argument('--output',
+                            help='Write human-readable information to file',
+                            type=argparse.FileType('w'),
+                            default=sys.stdout)
+    sub_parser.set_defaults(func=self.info_cert_permanent_attributes)
+
+    sub_parser = subparsers.add_parser(
+        'info_certificate',
+        aliases=['info_atx_certificate'],
+        help='Show avb_cert extension certificate.')
+    sub_parser.add_argument('--input',
+                            help='Path to certificate file',
+                            type=argparse.FileType('rb'),
+                            required=True)
+    sub_parser.add_argument('--output',
+                            help='Write human-readable information to file',
+                            type=argparse.FileType('w'),
+                            default=sys.stdout)
+    sub_parser.set_defaults(func=self.info_certificate)
+
+    sub_parser = subparsers.add_parser(
+        'info_cert_metadata',
+        aliases=['info_atx_metadata'],
+        help='Show avb_cert extension metadata.')
+    sub_parser.add_argument('--input',
+                            help='Path to metadata file',
+                            type=argparse.FileType('rb'),
+                            required=True)
+    sub_parser.add_argument('--output',
+                            help='Write human-readable information to file',
+                            type=argparse.FileType('w'),
+                            default=sys.stdout)
+    sub_parser.set_defaults(func=self.info_cert_metadata)
+
+    sub_parser = subparsers.add_parser(
+        'make_cert_metadata',
+        aliases=['make_atx_metadata'],
+        help='Create avb_cert extension metadata.')
     sub_parser.add_argument('--output',
                             help='Write metadata to file',
                             type=argparse.FileType('wb'),
@@ -4685,11 +5062,12 @@ class AvbTool(object):
                             help='Path to product key certificate file',
                             type=argparse.FileType('rb'),
                             required=True)
-    sub_parser.set_defaults(func=self.make_atx_metadata)
+    sub_parser.set_defaults(func=self.make_cert_metadata)
 
     sub_parser = subparsers.add_parser(
-        'make_atx_unlock_credential',
-        help='Create an Android Things eXtension (ATX) unlock credential.')
+        'make_cert_unlock_credential',
+        aliases=['make_atx_unlock_credential'],
+        help='Create an avb_cert extension unlock credential.')
     sub_parser.add_argument('--output',
                             help='Write credential to file',
                             type=argparse.FileType('wb'),
@@ -4722,7 +5100,21 @@ class AvbTool(object):
                             metavar='APP',
                             default=None,
                             required=False)
-    sub_parser.set_defaults(func=self.make_atx_unlock_credential)
+    sub_parser.set_defaults(func=self.make_cert_unlock_credential)
+
+    sub_parser = subparsers.add_parser(
+        'info_cert_unlock_credential',
+        aliases=['info_atx_unlock_credential'],
+        help='Show avb_cert extension unlock credential.')
+    sub_parser.add_argument('--input',
+                            help='Path to unlock credential file',
+                            type=argparse.FileType('rb'),
+                            required=True)
+    sub_parser.add_argument('--output',
+                            help='Write human-readable information to file',
+                            type=argparse.FileType('w'),
+                            default=sys.stdout)
+    sub_parser.set_defaults(func=self.info_cert_unlock_credential)
 
     args = parser.parse_args(argv[1:])
     try:
@@ -4749,10 +5141,15 @@ class AvbTool(object):
     """Implements the 'extract_public_key' sub-command."""
     self.avb.extract_public_key(args.key, args.output)
 
+  def extract_public_key_digest(self, args):
+    """Implements the 'extract_public_key_digest' sub-command."""
+    self.avb.extract_public_key_digest(args.key, args.output)
+
   def make_vbmeta_image(self, args):
     """Implements the 'make_vbmeta_image' sub-command."""
     args = self._fixup_common_args(args)
     self.avb.make_vbmeta_image(args.output, args.chain_partition,
+                               args.chain_partition_do_not_use_ab,
                                args.algorithm, args.key,
                                args.public_key_metadata, args.rollback_index,
                                args.flags, args.rollback_index_location,
@@ -4775,11 +5172,12 @@ class AvbTool(object):
   def add_hash_footer(self, args):
     """Implements the 'add_hash_footer' sub-command."""
     args = self._fixup_common_args(args)
-    self.avb.add_hash_footer(args.image.name if args.image else None,
+    self.avb.add_hash_footer(args.image,
                              args.partition_size, args.dynamic_partition_size,
                              args.partition_name, args.hash_algorithm,
-                             args.salt, args.chain_partition, args.algorithm,
-                             args.key,
+                             args.salt, args.chain_partition,
+                             args.chain_partition_do_not_use_ab,
+                             args.algorithm, args.key,
                              args.public_key_metadata, args.rollback_index,
                              args.flags, args.rollback_index_location,
                              args.prop, args.prop_from_file,
@@ -4806,13 +5204,25 @@ class AvbTool(object):
       sys.stderr.write('The --generate_fec option is deprecated since FEC '
                        'is now generated by default. Use the option '
                        '--do_not_generate_fec to not generate FEC.\n')
+    if args.hash_algorithm == '':
+      args.hash_algorithm = 'sha1'
+      # In --calc_max_image_size mode don't show the sha1 warning, since sha1
+      # digests get padded to the same size as sha256 anyway.
+      if not args.calc_max_image_size:
+        sys.stderr.write(
+"""Warning: 'avbtool add_hashtree_footer' executed without an explicit
+--hash_algorithm option. Defaulting to sha1 for backwards compatibility.
+Please use '--hash_algorithm sha256'.
+""")
     self.avb.add_hashtree_footer(
         args.image.name if args.image else None,
         args.partition_size,
         args.partition_name,
         not args.do_not_generate_fec, args.fec_num_roots,
         args.hash_algorithm, args.block_size,
-        args.salt, args.chain_partition, args.algorithm,
+        args.salt, args.chain_partition,
+        args.chain_partition_do_not_use_ab,
+        args.algorithm,
         args.key, args.public_key_metadata,
         args.rollback_index, args.flags,
         args.rollback_index_location, args.prop,
@@ -4857,7 +5267,8 @@ class AvbTool(object):
 
   def info_image(self, args):
     """Implements the 'info_image' sub-command."""
-    self.avb.info_image(args.image.name, args.output, args.atx)
+    self.avb.info_image(args.image.name, args.output,
+                        args.cert, args.output_pubkey)
 
   def verify_image(self, args):
     """Implements the 'verify_image' sub-command."""
@@ -4880,32 +5291,47 @@ class AvbTool(object):
     self.avb.calculate_kernel_cmdline(args.image.name, args.hashtree_disabled,
                                       args.output)
 
-  def make_atx_certificate(self, args):
-    """Implements the 'make_atx_certificate' sub-command."""
-    self.avb.make_atx_certificate(args.output, args.authority_key,
-                                  args.subject_key.name,
-                                  args.subject_key_version,
-                                  args.subject.read(),
-                                  args.subject_is_intermediate_authority,
-                                  args.usage,
-                                  args.signing_helper,
-                                  args.signing_helper_with_files)
+  def make_certificate(self, args):
+    """Implements the 'make_certificate' sub-command."""
+    # argparse mutually exclusive group ensures that at most one of the usage
+    # args will exist. If none exist, default to signing usage.
+    usage = (args.subject_is_intermediate_authority or args.usage or
+             args.usage_for_unlock or CERT_USAGE_SIGNING)
+    self.avb.make_certificate(args.output, args.authority_key,
+                              args.subject_key.name,
+                              args.subject_key_version,
+                              args.subject.read(),
+                              usage,
+                              args.signing_helper,
+                              args.signing_helper_with_files)
 
-  def make_atx_permanent_attributes(self, args):
-    """Implements the 'make_atx_permanent_attributes' sub-command."""
-    self.avb.make_atx_permanent_attributes(args.output,
-                                           args.root_authority_key.name,
-                                           args.product_id.read())
+  def make_cert_permanent_attributes(self, args):
+    """Implements the 'make_cert_permanent_attributes' sub-command."""
+    self.avb.make_cert_permanent_attributes(args.output,
+                                            args.root_authority_key.name,
+                                            args.product_id.read())
 
-  def make_atx_metadata(self, args):
-    """Implements the 'make_atx_metadata' sub-command."""
-    self.avb.make_atx_metadata(args.output,
-                               args.intermediate_key_certificate.read(),
+  def info_cert_permanent_attributes(self, args):
+    """Implements the 'info_cert_permanent_attributes' sub-command."""
+    self.avb.info_cert_permanent_attributes(args.input, args.output)
+
+  def info_certificate(self, args):
+    """Implements the 'info_certificate' sub-command."""
+    self.avb.info_certificate(args.input, args.output)
+
+  def info_cert_metadata(self, args):
+    """Implements the 'info_cert_metadata' sub-command."""
+    self.avb.info_cert_metadata(args.input, args.output)
+
+  def make_cert_metadata(self, args):
+    """Implements the 'make_cert_metadata' sub-command."""
+    self.avb.make_cert_metadata(args.output,
+                                args.intermediate_key_certificate.read(),
                                args.product_key_certificate.read())
 
-  def make_atx_unlock_credential(self, args):
-    """Implements the 'make_atx_unlock_credential' sub-command."""
-    self.avb.make_atx_unlock_credential(
+  def make_cert_unlock_credential(self, args):
+    """Implements the 'make_cert_unlock_credential' sub-command."""
+    self.avb.make_cert_unlock_credential(
         args.output,
         args.intermediate_key_certificate.read(),
         args.unlock_key_certificate.read(),
@@ -4913,6 +5339,10 @@ class AvbTool(object):
         args.unlock_key,
         args.signing_helper,
         args.signing_helper_with_files)
+
+  def info_cert_unlock_credential(self, args):
+    """Implements the 'info_cert_unlock_credential' sub-command."""
+    self.avb.info_cert_unlock_credential(args.input, args.output)
 
 
 if __name__ == '__main__':

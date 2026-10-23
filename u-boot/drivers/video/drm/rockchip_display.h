@@ -69,8 +69,8 @@
 
 #define ROCKCHIP_DSC_PPS_SIZE_BYTE			88
 
-#define ROCKCHIP_VOP2_SHARE_MODE_PRIMARY		1
-#define ROCKCHIP_VOP2_SHARE_MODE_SECONDARY		2
+#define ROCKCHIP_VOP2_SHARED_MODE_PRIMARY		1
+#define ROCKCHIP_VOP2_SHARED_MODE_SECONDARY		2
 
 enum data_format {
 	ROCKCHIP_FMT_ARGB8888 = 0,
@@ -135,6 +135,10 @@ enum rockchip_mcu_cmd {
 #define VOP_OUTPUT_IF_HDMI1	BIT(12)
 #define VOP_OUTPUT_IF_DP2	BIT(13)
 
+#define DRM_MODE_BLEND_PREMULTI		0
+#define DRM_MODE_BLEND_COVERAGE		1
+#define DRM_MODE_BLEND_PIXEL_NONE	2
+
 struct rockchip_mcu_timing {
 	int mcu_pix_total;
 	int mcu_cs_pst;
@@ -188,6 +192,37 @@ struct bcsh_state {
 	int saturation;
 	int sin_hue;
 	int cos_hue;
+};
+
+struct post_csc_convert_mode {
+	enum drm_color_encoding intput_color_encoding;
+	enum drm_color_encoding output_color_encoding;
+	bool is_input_yuv;
+	bool is_output_yuv;
+	bool is_input_full_range;
+	bool is_output_full_range;
+	u8 swap_channels;	/* For now, only rg swap in DCI mode is required */
+	u32 plat;		/* To distinguish platform */
+	u8 pixel_depth;		/* {8, 10} */
+	u8 coef_precision;	/* {8, 10, 13}, NOTE: coef_precision should be >= pixel_depth */
+};
+
+struct post_csc_coef {
+	s32 csc_coef00;
+	s32 csc_coef01;
+	s32 csc_coef02;
+	s32 csc_coef10;
+	s32 csc_coef11;
+	s32 csc_coef12;
+	s32 csc_coef20;
+	s32 csc_coef21;
+	s32 csc_coef22;
+
+	s32 csc_dc0;
+	s32 csc_dc1;
+	s32 csc_dc2;
+
+	u32 range_type;
 };
 
 struct crtc_state {
@@ -265,6 +300,7 @@ struct connector_state {
 	int type;
 	int output_if;
 	int output_flags;
+	int data_map_mode;
 	enum drm_color_encoding color_encoding;
 	enum drm_color_range color_range;
 	unsigned int bpc;
@@ -363,8 +399,6 @@ void drm_mode_max_resolution_filter(struct hdmi_edid_data *edid_data,
 unsigned long get_cubic_lut_buffer(int crtc_id);
 int rockchip_ofnode_get_display_mode(ofnode node, struct drm_display_mode *mode,
 				     u32 *bus_flags);
-void rockchip_display_make_crc32_table(void);
-uint32_t rockchip_display_crc32c_cal(unsigned char *data, int length);
 void drm_mode_set_crtcinfo(struct drm_display_mode *p, int adjust_flags);
 void drm_mode_convert_to_origin_mode(struct drm_display_mode *mode);
 void drm_mode_convert_to_split_mode(struct drm_display_mode *mode);
@@ -379,6 +413,8 @@ const struct device_node *
 rockchip_of_graph_get_port_by_id(ofnode node, int id);
 uint32_t rockchip_drm_get_cycles_per_pixel(uint32_t bus_format);
 char* rockchip_get_output_if_name(u32 output_if, char *name);
+int rockchip_calc_post_csc(struct csc_info *csc_cfg, struct post_csc_coef *csc_simple_coef,
+			   struct post_csc_convert_mode *convert_mode);
 
 #ifdef CONFIG_SPL_BUILD
 int rockchip_spl_vop_probe(struct crtc_state *crtc_state);

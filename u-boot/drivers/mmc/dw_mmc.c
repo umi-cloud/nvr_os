@@ -494,7 +494,7 @@ static int dwmci_send_cmd(struct mmc *mmc, struct mmc_cmd *cmd,
 	return ret;
 }
 
-#ifdef CONFIG_SPL_BLK_READ_PREPARE
+#if CONFIG_IS_ENABLED(BLK_READ_PREPARE)
 #ifdef CONFIG_DM_MMC
 static int dwmci_send_cmd_prepare(struct udevice *dev, struct mmc_cmd *cmd,
 				  struct mmc_data *data)
@@ -675,8 +675,12 @@ static int dwmci_setup_bus(struct dwmci_host *host, u32 freq)
 		}
 	} while (status & DWMCI_CMD_START);
 
+#ifdef CONFIG_SPL_BLK_READ_PREPARE
+	dwmci_writel(host, DWMCI_CLKENA, DWMCI_CLKEN_ENABLE);
+#else
 	dwmci_writel(host, DWMCI_CLKENA, DWMCI_CLKEN_ENABLE |
 			DWMCI_CLKEN_LOW_PWR);
+#endif
 
 	dwmci_writel(host, DWMCI_CMD, DWMCI_CMD_PRV_DAT_WAIT |
 			DWMCI_CMD_UPD_CLK | DWMCI_CMD_START);
@@ -887,7 +891,7 @@ int dwmci_probe(struct udevice *dev)
 const struct dm_mmc_ops dm_dwmci_ops = {
 	.card_busy	= dwmci_card_busy,
 	.send_cmd	= dwmci_send_cmd,
-#ifdef CONFIG_SPL_BLK_READ_PREPARE
+#if CONFIG_IS_ENABLED(BLK_READ_PREPARE)
 	.send_cmd_prepare = dwmci_send_cmd_prepare,
 #endif
 	.set_ios	= dwmci_set_ios,

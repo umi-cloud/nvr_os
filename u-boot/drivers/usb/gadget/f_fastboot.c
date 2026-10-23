@@ -12,11 +12,13 @@
  */
 #include <config.h>
 #include <common.h>
+#include <command.h>
 #include <console.h>
 #include <android_bootloader.h>
 #include <errno.h>
 #include <fastboot.h>
 #include <malloc.h>
+#include <stdlib.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
 #include <linux/usb/composite.h>
@@ -786,12 +788,36 @@ static int fb_read_var(char *cmd, char *response,
 	}
 	case FB_UNLOCKED: {
 #ifdef CONFIG_RK_AVB_LIBAVB_USER
+		uint8_t lock_state = 0;
+
+		if (rk_avb_read_lock_state(&lock_state)) {
+			fb_add_string(response, chars_left, "read lock_state failed", NULL);
+			ret = -1;
+			break;
+		}
+		if (lock_state)
+			fb_add_string(response, chars_left, "avb unlock", NULL);
+		else
+			fb_add_string(response, chars_left, "avb lock", NULL);
+#else
+		fb_add_string(response, chars_left, "not implemented", NULL);
+		ret = -1;
+#endif
+		break;
+	}
+	case FB_FLASH_UNLOCKED: {
+#ifdef CONFIG_RK_AVB_LIBAVB_USER
 		uint8_t flash_lock_state = 0;
 
-		if (rk_avb_read_flash_lock_state(&flash_lock_state))
-			fb_add_string(response, chars_left, "yes", NULL);
+		if (rk_avb_read_flash_lock_state(&flash_lock_state)) {
+			fb_add_string(response, chars_left, "read flash_lock_state failed", NULL);
+			ret = -1;
+			break;
+		}
+		if (flash_lock_state)
+			fb_add_string(response, chars_left, "flash unlock", NULL);
 		else
-			fb_add_string(response, chars_left, "no", NULL);
+			fb_add_string(response, chars_left, "flash lock", NULL);
 #else
 		fb_add_string(response, chars_left, "not implemented", NULL);
 		ret = -1;
@@ -1113,6 +1139,7 @@ static const struct {
 	{ NAME_ARGS("partition-type", ':'), FB_PART_TYPE},
 	{ NAME_ARGS("partition-size", ':'), FB_PART_SIZE},
 	{ NAME_NO_ARGS("unlocked"), FB_UNLOCKED},
+	{ NAME_NO_ARGS("flash-unlocked"), FB_FLASH_UNLOCKED},
 	{ NAME_NO_ARGS("off-mode-charge"), FB_OFF_MODE_CHARGE},
 	{ NAME_NO_ARGS("battery-voltage"), FB_BATT_VOLTAGE},
 	{ NAME_NO_ARGS("variant"), FB_VARIANT},
@@ -1885,7 +1912,6 @@ static void cb_oem_perm_attr(void)
 {
 #ifdef CONFIG_RK_AVB_LIBAVB_USER
 #ifndef CONFIG_ROCKCHIP_PRELOADER_PUB_KEY
-	sha256_context ctx;
 	uint8_t digest[SHA256_SUM_LEN] = {0};
 	uint8_t digest_temp[SHA256_SUM_LEN] = {0};
 	uint8_t perm_attr_temp[PERM_ATTR_TOTAL_SIZE] = {0};
@@ -1919,11 +1945,8 @@ static void cb_oem_perm_attr(void)
 				return;
 			}
 
-			sha256_starts(&ctx);
-			sha256_update(&ctx,
-				      (const uint8_t *)perm_attr_temp,
-				      PERM_ATTR_TOTAL_SIZE);
-			sha256_finish(&ctx, digest);
+			sha256_csum((const unsigned char *)perm_attr_temp,
+				    PERM_ATTR_TOTAL_SIZE, digest);
 			if (memcmp(digest, digest_temp, SHA256_SUM_LEN) == 0) {
 				printf("The hash has been written!\n");
 				fastboot_tx_write_str("OKAY");
@@ -1949,10 +1972,8 @@ static void cb_oem_perm_attr(void)
 	}
 #ifndef CONFIG_ROCKCHIP_PRELOADER_PUB_KEY
 	memset(digest, 0, SHA256_SUM_LEN);
-	sha256_starts(&ctx);
-	sha256_update(&ctx, (const uint8_t *)CONFIG_FASTBOOT_BUF_ADDR,
-		      PERM_ATTR_TOTAL_SIZE);
-	sha256_finish(&ctx, digest);
+	sha256_csum((const unsigned char *)CONFIG_FASTBOOT_BUF_ADDR,
+		    PERM_ATTR_TOTAL_SIZE, digest);
 
 	if (rk_avb_write_attribute_hash((uint8_t *)digest,
 					SHA256_SUM_LEN)) {
@@ -1987,7 +2008,7 @@ static void cb_oem_perm_attr(void)
 static void cb_oem_perm_attr_rsa_cer(void)
 {
 #ifdef CONFIG_RK_AVB_LIBAVB_USER
-	if (download_bytes != 256) {
+	if (download_bytes != RK_AVB_PERM_ATTR_CER_SIZE) {
 		printf("Permanent attribute rsahash size is not equal!\n");
 		fastboot_tx_write_str("FAILperm attribute rsahash size error");
 		return;
@@ -2215,28 +2236,30 @@ static void cb_oem(struct usb_ep *ep, struct usb_request *req)
 		uint8_t lock_state;
 		char out_is_trusted = true;
 
-		if (rk_avb_read_lock_state(&lock_state))
-			fastboot_tx_write_str("FAILlock sate read failure");
-		if (lock_state >> 1 == 1) {
-			fastboot_tx_write_str("FAILThe vboot is disable!");
-		} else {
-			lock_state = 1;
+		if (rk_avb_read_lock_state(&lock_state)) {
+			fastboot_tx_write_str("FAILlock state read failure");
+			return;
+		}
+		if (lock_state & DISABLE_UNLOCK_MASK) {
+			fastboot_tx_write_str("FAILThe AVB unlock is disable!");
+			return;
+		}
+		lock_state = 1;
 #ifdef CONFIG_RK_AVB_LIBAVB_ENABLE_ATH_UNLOCK
-			if (rk_auth_unlock((void *)CONFIG_FASTBOOT_BUF_ADDR,
-					   &out_is_trusted)) {
-				printf("rk_auth_unlock ops error!\n");
-				fastboot_tx_write_str("FAILrk_auth_unlock ops error!");
-				return;
-			}
+		if (rk_auth_unlock((void *)CONFIG_FASTBOOT_BUF_ADDR,
+				   &out_is_trusted)) {
+			printf("rk_auth_unlock ops error!\n");
+			fastboot_tx_write_str("FAILrk_auth_unlock ops error!");
+			return;
+		}
 #endif
-			if (out_is_trusted == true) {
-				if (rk_avb_write_lock_state(lock_state))
-					fastboot_tx_write_str("FAILwrite lock state failed");
-				else
-					fastboot_tx_write_str("OKAY");
-			} else {
-				fastboot_tx_write_str("FAILauthenticated unlock fail");
-			}
+		if (out_is_trusted == true) {
+			if (rk_avb_write_lock_state(lock_state))
+				fastboot_tx_write_str("FAILwrite lock state failed");
+			else
+				fastboot_tx_write_str("OKAY");
+		} else {
+			fastboot_tx_write_str("FAILauthenticated unlock fail");
 		}
 #else
 		fastboot_tx_write_str("FAILnot implemented");
@@ -2247,19 +2270,16 @@ static void cb_oem(struct usb_ep *ep, struct usb_request *req)
 		cb_oem_perm_attr_rsa_cer();
 	} else if (strncmp("fuse at-bootloader-vboot-key", cmd + 4, 27) == 0) {
 #ifdef CONFIG_RK_AVB_LIBAVB_USER
-		sha256_context ctx;
 		uint8_t digest[SHA256_SUM_LEN];
 
-		if (download_bytes != VBOOT_KEY_HASH_SIZE) {
+		if (download_bytes != VBOOT_KEY_SIZE) {
 			fastboot_tx_write_str("FAILinvalid vboot key length");
 			printf("The vboot key size error!\n");
 			return;
 		}
 
-		sha256_starts(&ctx);
-		sha256_update(&ctx, (const uint8_t *)CONFIG_FASTBOOT_BUF_ADDR,
-			      VBOOT_KEY_SIZE);
-		sha256_finish(&ctx, digest);
+		sha256_csum((const unsigned char *)CONFIG_FASTBOOT_BUF_ADDR,
+			    VBOOT_KEY_SIZE, digest);
 
 		if (rk_avb_write_vbootkey_hash((uint8_t *)digest,
 					       SHA256_SUM_LEN)) {
@@ -2280,6 +2300,24 @@ static void cb_oem(struct usb_ep *ep, struct usb_request *req)
 #else
 		fastboot_tx_write_str("FAILnot implemented");
 #endif
+	} else if (strncmp("dev", cmd + 4, 14) == 0) {
+		struct blk_desc *desc = NULL;
+		char *argv[CONFIG_SYS_MAXARGS + 1];
+
+		make_argv(cmd + 8, sizeof(argv)/sizeof(argv[0]), argv);
+		if (bootdev_init(argv[0], argv[1])) {
+			fastboot_tx_write_str("FAILinit bootdev!");
+			return;
+		}
+
+		desc = blk_get_devnum_by_typename(argv[0], atoi(argv[1]));
+		if (!desc) {
+			fastboot_tx_write_str("FAILget expected bootdev!");
+			return;
+		}
+
+		rockchip_set_bootdev(desc);
+		fastboot_tx_write_str("OKAY");
 	} else {
 		fastboot_tx_write_str("FAILunknown oem command");
 	}

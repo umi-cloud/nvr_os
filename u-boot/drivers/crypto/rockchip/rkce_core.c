@@ -49,9 +49,9 @@ struct rkce_hardware {
 #define CHECK_RKCE_INITED(hardware)   WARN_ON_ONCE(!(hardware) || \
 					   !(((struct rkce_hardware *)(hardware))->rkce_reg))
 #define POLL_TIMEOUT(condition, timeout_ms) ({                        \
-			int timeout = timeout_ms;                     \
-			while ((condition) && timeout--) {           \
-				udelay(1000);             \
+			int timeout = timeout_ms * 1000;              \
+			while ((condition) && timeout--) {            \
+				udelay(1);                            \
 			}                                             \
 			if (timeout < 0)                              \
 				rk_err("%s timeout!\n", #condition);  \
@@ -214,13 +214,13 @@ int rkce_soft_reset(void *rkce_hw, uint32_t reset_sel)
 	rkce_reg = GET_RKCE_REG(rkce_hw);
 
 	if (reset_sel & RKCE_RESET_SYMM)
-		value |= RKCE_RST_CTL_SW_SYMM_RESET_SHIFT;
+		value |= RKCE_RST_CTL_SW_SYMM_RESET_MASK;
 
 	if (reset_sel & RKCE_RESET_HASH)
-		value |= RKCE_RST_CTL_SW_HASH_RESET_SHIFT;
+		value |= RKCE_RST_CTL_SW_HASH_RESET_MASK;
 
 	if (reset_sel & RKCE_RESET_PKA)
-		value |= RKCE_RST_CTL_SW_PKA_RESET_SHIFT;
+		value |= RKCE_RST_CTL_SW_PKA_RESET_MASK;
 
 	rkce_reg->RST_CTL = value | RKCE_WRITE_MASK_ALL;
 

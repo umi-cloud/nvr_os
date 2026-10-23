@@ -155,6 +155,18 @@ config TOOLS_DEBUG
 	  it is possible to set breakpoints on particular lines, single-step
 	  debug through the source code, etc.
 
+config TOOLS_STATIC_DTC
+	bool "Build scripts/dtc/dtc statically"
+	default n
+	help
+	  Enable this to link the host-side dtc tool statically.
+
+config TOOLS_STATIC_FIT
+	bool "Build FIT tools statically"
+	default n
+	help
+	  Enable this to link the host-side FIT tool statically.
+
 endif # EXPERT
 
 config PHYS_64BIT
@@ -221,10 +233,20 @@ config FIT_ENABLE_RSA4096_SUPPORT
 	  there is no known feasible attack that could produce a 'collision' with differing
 	  input data. Use this for the higher security than RSA2048 in default.
 
+config FIT_FULL_CHECK
+	bool "Do a full check of the FIT before using it"
+	default y
+	help
+	  Enable this do a full check of the FIT to make sure it is valid. This
+	  helps to protect against carefully crafted FITs which take advantage
+	  of bugs or omissions in the code. This includes a bad structure,
+	  multiple root nodes and the like.
+
 config FIT_SIGNATURE
 	bool "Enable signature verification of FIT uImages"
 	depends on DM
 	select RSA
+	select FIT_FULL_CHECK
 	select CONSOLE_DISABLE_CLI
 	help
 	  This option enables signature verification of FIT uImages,
@@ -259,6 +281,16 @@ config FIT_CIPHER
 	help
 	  Enable the feature of data ciphering/unciphering in the tool mkimage
 	  and in the u-boot support of the FIT image.
+
+config FIT_SIGNATURE_MAX_SIZE
+	hex "Max size of signed FIT structures"
+	depends on FIT_SIGNATURE
+	default 0x10000000
+	help
+	  This option sets a max size in bytes for verified FIT uImages.
+	  A sane value of 256MB protects corrupted DTB structures from overlapping
+	  device memory. Assure this size does not extend past expected storage
+	  space.
 
 config FIT_VERBOSE
 	bool "Show verbose messages when FIT images fail"
@@ -308,16 +340,26 @@ config FIT_OMIT_UBOOT
 
 if SPL
 
+config SPL_FIT_FULL_CHECK
+	bool "Do a full check of the FIT before using it"
+	help
+	  Enable this do a full check of the FIT to make sure it is valid. This
+	  helps to protect against carefully crafted FITs which take advantage
+	  of bugs or omissions in the code. This includes a bad structure,
+	  multiple root nodes and the like.
+
 config SPL_FIT
 	bool "Support Flattened Image Tree within SPL"
 	depends on SPL
 	select SPL_OF_LIBFDT
+	select SPL_FIT_FULL_CHECK
 
 config SPL_FIT_SIGNATURE
 	bool "Enable signature verification of FIT firmware within SPL"
 	depends on SPL_DM
 	select SPL_FIT
 	select SPL_RSA
+	select SPL_HASH_SUPPORT if SPL_ARMV8_CRYPTO
 
 config SPL_FIT_ROLLBACK_PROTECT
 	bool "Enable SPL rollback-index protection for FIT image"
@@ -480,6 +522,57 @@ config ARCH_FIXUP_FDT_MEMORY
 	  Enable FDT memory map syncup before OS boot. This feature can be
 	  used for booting OS with different memory setup where the part of
 	  the memory location should be used for different purpose.
+
+config MOS_SUPPORT
+	bool "Enable Multiple OS support"
+	default n
+
+if MOS_SUPPORT
+config MOS_SECONDARY
+	bool "This is the secondary os of Multiple-OS"
+	# Secondary use ramdisk only
+	select SPL_RAMDISK if MOS_BOOTDEV_SHARED
+	select RAMDISK if MOS_BOOTDEV_SHARED
+
+config MOS_SECONDARY_LOW_ADDR
+	bool "Secondary OS support low memory addr"
+	default n
+
+config MOS_SECONDARY_SPL_BACKUP_ADDR
+	hex "The backup image address of secondary spl"
+	depends on MOS_SECONDARY
+	default 0x41840000
+
+config MOS_ONE_IMAGE
+	bool "Enable Mos one image solution support"
+	depends on SPL
+	select SPL_ROCKCHIP_RESOURCE_IMAGE
+	select SPL_ROCKCHIP_VENDOR_PARTITION
+
+config MOS_BOOTDEV_SHARED
+	bool "The boot device are shared between Multiple-OS"
+	# Primary use virtual bootdev + disk
+	select VIRTUAL_DISK if !MOS_SECONDARY
+
+config MOS_BOOTDEV_SHARED_ADDR
+	hex "The shared block load address of Multiple-OS"
+	depends on MOS_BOOTDEV_SHARED
+	default 0x42b00000
+
+config MOS_BOOTDEV_SHARED_ARGS_SIZE
+	hex "The bytes of shared args of Multiple-OS"
+	depends on MOS_BOOTDEV_SHARED
+	default 0x00018000
+
+config MOS_BOOTDEV_NAME
+	string "The boot device name of this OS"
+	depends on !MOS_BOOTDEV_SHARED
+	default ""
+
+config MOS_SYSCFG_ADDR
+	hex "The system cfg load address of Multiple-OS"
+	default 0x41400000
+endif
 
 endmenu		# Boot images
 

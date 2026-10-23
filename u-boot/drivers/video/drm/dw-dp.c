@@ -193,11 +193,13 @@ struct drm_dp_link_train {
 
 struct dw_dp_link {
 	u8 dpcd[DP_RECEIVER_CAP_SIZE];
+	u8 downstream_ports[DP_MAX_DOWNSTREAM_PORTS];
 	unsigned char revision;
 	unsigned int rate;
 	unsigned int lanes;
 	struct drm_dp_link_caps caps;
 	struct drm_dp_link_train train;
+	struct drm_dp_desc desc;
 	u8 sink_count;
 	u8 vsc_sdp_extension_for_colorimetry_supported;
 };
@@ -222,6 +224,14 @@ struct dw_dp_chip_data {
 	int pixel_mode;
 };
 
+struct dw_dp_dfp {
+	int min_tmds_clock;
+	int max_tmds_clock;
+	int max_dotclock;
+	u8 max_bpc;
+	bool ycbcr_444_to_420;
+};
+
 struct dw_dp {
 	struct rockchip_connector connector;
 	struct udevice *dev;
@@ -238,9 +248,11 @@ struct dw_dp {
 	struct drm_dp_aux aux;
 	struct dw_dp_link link;
 	struct dw_dp_video video;
+	struct dw_dp_dfp dfp;
 
 	bool force_hpd;
 	bool force_output;
+	bool branch_ycbcr_444_to_422;
 	u32 max_link_rate;
 };
 
@@ -564,6 +576,7 @@ static int dw_dp_link_probe(struct dw_dp *dp)
 	ret = drm_dp_read_dpcd_caps(&dp->aux, link->dpcd);
 	if (ret < 0)
 		return ret;
+	drm_dp_read_desc(&dp->aux, &link->desc, drm_dp_is_branch(link->dpcd));
 
 	ret = drm_dp_dpcd_readb(&dp->aux, DP_DPRX_FEATURE_ENUMERATION_LIST,
 				&dpcd);
@@ -1145,13 +1158,15 @@ static int dw_dp_send_vsc_sdp(struct dw_dp *dp)
 		break;
 	}
 
-	if (video->color_format == DRM_COLOR_FORMAT_RGB444)
+	if (video->color_format == DRM_COLOR_FORMAT_RGB444) {
 		vsc.colorimetry = DP_COLORIMETRY_DEFAULT;
-	else
+		vsc.dynamic_range = DP_DYNAMIC_RANGE_VESA;
+	} else {
 		vsc.colorimetry = DP_COLORIMETRY_BT709_YCC;
+		vsc.dynamic_range = DP_DYNAMIC_RANGE_CTA;
+	}
 
 	vsc.bpc = video->bpc;
-	vsc.dynamic_range = DP_DYNAMIC_RANGE_CTA;
 	vsc.content_type = DP_CONTENT_TYPE_NOT_DEFINED;
 
 	dw_dp_vsc_sdp_pack(&vsc, &sdp);
@@ -1455,18 +1470,7 @@ static int dw_dp_connector_init(struct rockchip_connector *conn, struct display_
 	dw_dp_init(dp);
 	ret = generic_phy_power_on(&dp->phy);
 
-	return ret;
-}
-
-static int dw_dp_connector_get_edid(struct rockchip_connector *conn, struct display_state *state)
-{
-	int ret;
-	struct connector_state *conn_state = &state->conn_state;
-	struct dw_dp *dp = connector_to_dw_dp(conn);
-
-	conn_state->edid = drm_do_get_edid(&dp->aux.ddc);
-	if (!conn_state->edid)
-		ret = -EINVAL;
+	conn->aux = &dp->aux;
 
 	return ret;
 }
@@ -1533,6 +1537,10 @@ static int dw_dp_connector_enable(struct rockchip_connector *conn, struct displa
 		return ret;
 	}
 
+	if (dp->branch_ycbcr_444_to_422)
+		drm_dp_dpcd_writeb(&dp->aux, DP_PROTOCOL_CONVERTER_CONTROL_1,
+				   DP_CONVERSION_TO_YCBCR420_ENABLE);
+
 	return 0;
 }
 
@@ -1563,11 +1571,49 @@ static int dw_dp_connector_detect(struct rockchip_connector *conn, struct displa
 
 	if (status && !dp->force_output) {
 		ret = dw_dp_link_probe(dp);
-		if (ret)
+		if (ret) {
 			printf("failed to probe DP link: %d\n", ret);
+			return 0;
+		}
 	}
 
+	ret = drm_dp_read_downstream_info(&dp->aux, dp->link.dpcd, dp->link.downstream_ports);
+	if (ret)
+		return ret;
+
 	return status;
+}
+
+static int dw_dp_hdmi_tmds_clock(int clock, int bpc, bool ycbcr420_output)
+{
+	if (ycbcr420_output)
+		clock /= 2;
+
+	return DIV_ROUND_CLOSEST(clock * bpc, 8);
+}
+
+bool dw_dp_tmds_clock_valid(struct dw_dp *dp, int bpc,
+			    struct drm_display_mode *mode,
+			    struct drm_display_info *info)
+{
+	int tmds_clock, min_tmds_clock, max_tmds_clock;
+	bool ycbcr_420_output;
+
+	if (dp->dfp.max_dotclock && mode->clock > dp->dfp.max_dotclock)
+		return false;
+
+	ycbcr_420_output = drm_mode_is_420_only(info, mode);
+	tmds_clock = dw_dp_hdmi_tmds_clock(mode->clock, bpc, ycbcr_420_output);
+	min_tmds_clock = dp->dfp.min_tmds_clock;
+	max_tmds_clock = min(dp->dfp.max_tmds_clock, info->max_tmds_clock);
+
+	if (min_tmds_clock && tmds_clock < min_tmds_clock)
+		return false;
+
+	if (max_tmds_clock && tmds_clock > max_tmds_clock)
+		return false;
+
+	return true;
 }
 
 static int dw_dp_mode_valid(struct dw_dp *dp, struct hdmi_edid_data *edid_data)
@@ -1591,6 +1637,9 @@ static int dw_dp_mode_valid(struct dw_dp *dp, struct hdmi_edid_data *edid_data)
 		if (!dw_dp_bandwidth_ok(dp, &edid_data->mode_buf[i], min_bpp, link->lanes,
 					link->rate))
 			edid_data->mode_buf[i].invalid = true;
+
+		if (!dw_dp_tmds_clock_valid(dp, 8, &edid_data->mode_buf[i], di))
+			edid_data->mode_buf[i].invalid = true;
 	}
 
 	return 0;
@@ -1600,6 +1649,8 @@ static u32 dw_dp_get_output_bus_fmts(struct dw_dp *dp, struct hdmi_edid_data *ed
 {
 	struct dw_dp_link *link = &dp->link;
 	unsigned int i;
+
+	dp->branch_ycbcr_444_to_422 = false;
 
 	for (i = 0; i < ARRAY_SIZE(possible_output_fmts); i++) {
 		const struct dw_dp_output_format *fmt = &possible_output_fmts[i];
@@ -1614,12 +1665,25 @@ static u32 dw_dp_get_output_bus_fmts(struct dw_dp *dp, struct hdmi_edid_data *ed
 		    !link->vsc_sdp_extension_for_colorimetry_supported)
 			continue;
 
-		if (drm_mode_is_420_only(&edid_data->display_info, edid_data->preferred_mode) &&
-		    fmt->color_format != DRM_COLOR_FORMAT_YCRCB420)
-			continue;
+		if (drm_mode_is_420_only(&edid_data->display_info, edid_data->preferred_mode)) {
+			if (dp->dfp.ycbcr_444_to_420) {
+				dp->branch_ycbcr_444_to_422 = true;
+				if (fmt->color_format != DRM_COLOR_FORMAT_YCRCB444)
+					continue;
+			} else {
+				if (fmt->color_format != DRM_COLOR_FORMAT_YCRCB420)
+					continue;
+			}
+		}
 
 		if (!dw_dp_bandwidth_ok(dp, edid_data->preferred_mode, fmt->bpp, link->lanes,
 					link->rate))
+			continue;
+
+		if (dp->dfp.max_bpc && fmt->bpc > dp->dfp.max_bpc)
+			continue;
+
+		if (dp->dfp.max_tmds_clock && fmt->bpc > 8)
 			continue;
 
 		break;
@@ -1629,6 +1693,32 @@ static u32 dw_dp_get_output_bus_fmts(struct dw_dp *dp, struct hdmi_edid_data *ed
 		return 1;
 
 	return i;
+}
+
+static void dw_dp_update_dfp(struct dw_dp *dp)
+{
+	struct dw_dp_link *link = &dp->link;
+	struct dw_dp_dfp *dfp = &dp->dfp;
+	bool ycbcr_420_passthrough, ycbcr_444_to_420;
+
+	memset(&dp->dfp, 0, sizeof(dp->dfp));
+
+	dfp->max_bpc = drm_dp_downstream_max_bpc(link->dpcd, link->downstream_ports);
+
+	dfp->max_dotclock = drm_dp_downstream_max_dotclock(link->dpcd, link->downstream_ports);
+
+	dfp->min_tmds_clock = drm_dp_downstream_min_tmds_clock(link->dpcd, link->downstream_ports);
+	dfp->max_tmds_clock = drm_dp_downstream_max_tmds_clock(link->dpcd, link->downstream_ports);
+	ycbcr_420_passthrough = drm_dp_downstream_420_passthrough(link->dpcd,
+								  link->downstream_ports);
+	ycbcr_444_to_420 = drm_dp_downstream_444_to_420_conversion(link->dpcd,
+								   link->downstream_ports);
+	/* Prefer 4:2:0 passthrough over 4:4:4->4:2:0 conversion */
+	dfp->ycbcr_444_to_420 = ycbcr_444_to_420 && !ycbcr_420_passthrough;
+
+	printf("dfp max bpc:%d, max dot:%d, min tmds:%d, max tmds:%d, ycbcr 444 to 420:%d\n",
+	       dfp->max_bpc, dfp->max_dotclock, dfp->min_tmds_clock, dfp->max_tmds_clock,
+	       dfp->ycbcr_444_to_420);
 }
 
 static int dw_dp_connector_get_timing(struct rockchip_connector *conn, struct display_state *state)
@@ -1659,6 +1749,8 @@ static int dw_dp_connector_get_timing(struct rockchip_connector *conn, struct di
 			printf("failed to get edid\n");
 			goto err;
 		}
+
+		dw_dp_update_dfp(dp);
 
 		//drm_rk_filter_whitelist(&edid_data);
 		if (state->conn_state.secondary) {
@@ -1715,7 +1807,6 @@ err:
 
 static const struct rockchip_connector_funcs dw_dp_connector_funcs = {
 	.init = dw_dp_connector_init,
-	.get_edid = dw_dp_connector_get_edid,
 	.prepare = dw_dp_connector_prepare,
 	.enable = dw_dp_connector_enable,
 	.disable = dw_dp_connector_disable,

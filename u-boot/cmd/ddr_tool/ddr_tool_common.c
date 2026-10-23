@@ -153,7 +153,7 @@ int judge_test_addr(ulong *arg, ulong *start_adr, ulong *length)
 	u32 available = 0;
 
 	for (i = 0; i < CONFIG_NR_DRAM_BANKS; i++)
-		if (start_adr[i])
+		if (start_adr[i] != 0 || length[i] != 0)
 			max_bank = i + 1;
 
 	if (!arg[1])

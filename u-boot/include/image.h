@@ -53,6 +53,9 @@ struct lmb;
 
 #endif /* USE_HOSTCC */
 
+/* An invalid size, meaning that the image size is not known */
+#define IMAGE_SIZE_INVAL        (-1UL)
+
 #if IMAGE_ENABLE_FIT
 #include <hash.h>
 #include <linux/libfdt.h>
@@ -946,6 +949,7 @@ int bootz_setup(ulong image, ulong *start, ulong *end);
 #define FIT_FDT_PROP		"fdt"
 #define FIT_MULTI_PROP		"multi"
 #define FIT_LOADABLE_PROP	"loadables"
+#define FIT_COMPAT_PROP		"compatible"
 #define FIT_DEFAULT_PROP	"default"
 #define FIT_SETUP_PROP		"setup"
 #define FIT_FPGA_PROP		"fpga"
@@ -1087,8 +1091,8 @@ int fit_conf_get_node(const void *fit, const char *conf_uname);
 
 /* __weak function */
 int fit_rollback_index_verify(const void *fit, uint32_t rollback_fd,
-			      uint32_t *fit_index, uint32_t *otp_index);
-int fit_read_otp_rollback_index(uint32_t fit_index, uint32_t *otp_index);
+			      uint32_t *fit_index, uint32_t *dev_index);
+int fit_read_dev_rollback_index(uint32_t fit_index, uint32_t *dev_index);
 
 /**
  * fit_conf_get_prop_node() - Get node refered to by a configuration

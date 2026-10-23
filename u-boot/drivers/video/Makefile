@@ -57,7 +57,7 @@ obj-$(CONFIG_VIDEO_DW_HDMI) += dw_hdmi.o
 obj-${CONFIG_VIDEO_TEGRA124} += tegra124/
 obj-${CONFIG_EXYNOS_FB} += exynos/
 obj-${CONFIG_VIDEO_ROCKCHIP} += rockchip/
-obj-${CONFIG_ROCKCHIP_EINK} += rk_eink/
+obj-${CONFIG_ROCKCHIP_EBOOK} += rk_ebook/
 
 obj-y += bridge/
 obj-y += sunxi/

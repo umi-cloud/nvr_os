@@ -47,6 +47,9 @@ enum scmi_clock_message_id {
 	SCMI_CLOCK_RATE_SET = 0x5,
 	SCMI_CLOCK_RATE_GET = 0x6,
 	SCMI_CLOCK_CONFIG_SET = 0x7,
+	SCMI_CLOCK_POSSIBLE_PARENTS_GET = 0xC,
+	SCMI_CLOCK_PARENT_SET = 0xD,
+	SCMI_CLOCK_PARENT_GET = 0xE,
 };
 
 #define SCMI_CLK_RATE_ASYNC_NOTIFY	BIT(0)
@@ -116,6 +119,24 @@ struct scmi_clk_rate_set_out {
 	s32 status;
 };
 
+/**
+ * struct scmi_clk_set_parent_in - Message payload for CLOCK_PARENT_SET command
+ * @clock_id:	SCMI clock ID
+ * @parent_id:	SCMI parent clock ID
+ */
+struct scmi_clk_set_parent_in {
+	u32 clock_id;
+	u32 parent_id;
+};
+
+/**
+ * struct scmi_clk_set_parent_out - Response payload for CLOCK_PARENT_SET command
+ * @status:	SCMI command status
+ */
+struct scmi_clk_set_parent_out {
+	s32 status;
+};
+
 /*
  * SCMI Reset Domain Protocol
  */
@@ -173,6 +194,36 @@ struct scmi_rd_reset_in {
  * @status:	SCMI command status
  */
 struct scmi_rd_reset_out {
+	s32 status;
+};
+
+/*
+ * SCMI Power Domain Management Protocol
+ */
+
+enum scmi_power_domain_message_id {
+	SCMI_POWER_DOMAIN_STATE_SET = 0x4,
+};
+
+#define SCMI_PWD_PSTATE_TYPE_LOST BIT(30)
+
+/**
+ * struct scmi_pwd_state_set_in - Message payload for POWER_DOMAIN_STATE_SET command
+ * @flags:      Flags
+ * @@domain_id: Identifier of power domain
+ * @pstate:     Power state of the domain
+ */
+struct scmi_pwd_state_set_in {
+	u32 flags;
+	u32 domain_id;
+	u32 pstate;
+};
+
+/**
+ * struct scmi_pwd_state_set_out - Message payload for POWER_DOMAIN_STATE_SET command
+ * @status:	SCMI command status
+ */
+struct scmi_pwd_state_set_out {
 	s32 status;
 };
 

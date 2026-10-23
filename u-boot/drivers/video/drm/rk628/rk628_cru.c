@@ -128,8 +128,8 @@ static unsigned long rk628_cru_clk_set_rate_pll(struct rk628 *rk628,
 						unsigned long rate)
 {
 	unsigned long fin = REFCLK_RATE, fout = rate;
-	u8 min_refdiv, max_refdiv, postdiv;
-	u8 dsmpd = 1, postdiv1 = 0, postdiv2 = 0, refdiv = 0;
+	u8 min_refdiv, max_refdiv, postdiv, postdiv1 = 0, postdiv2 = 0, refdiv = 0;
+	u8 dsmpd = 0;
 	u16 fbdiv = 0;
 	u32 frac = 0;
 	u64 foutvco, foutpostdiv, div1, div2;
@@ -147,12 +147,16 @@ static unsigned long rk628_cru_clk_set_rate_pll(struct rk628 *rk628,
 	if (fout < MIN_FOUTPOSTDIV_RATE || fout > MAX_FOUTPOSTDIV_RATE)
 		return 0;
 
-	if (id == CGU_CLK_CPLL)
+	if (id == CGU_CLK_CPLL) {
 		offset = 0x00;
-	else if (id == CGU_CLK_GPLL)
+		dsmpd = (rk628->ssc.enable & SSC_CPLL) ? 0 : 1;
+	} else if (id == CGU_CLK_GPLL) {
 		offset = 0x20;
-	else
+		dsmpd = (rk628->ssc.enable & SSC_GPLL) ? 0 : 1;
+	} else {
 		offset = 0x40;
+		dsmpd = (rk628->ssc.enable & SSC_APLL) ? 0 : 1;
+	}
 
 	if (id != CGU_CLK_APLL)
 		rk628_i2c_write(rk628, offset + CRU_CPLL_CON1, PLL_PD(1));
@@ -562,27 +566,199 @@ void rk628_cru_init(struct rk628 *rk628)
 	u32 val = 0;
 	u8 mcu_mode;
 
+	/*
+	 * In rk628d application, if you need to dynamically tune the cpll
+	 * frequency, you need to mount pclk under gpll, otherwise it will
+	 * affect the i2c use. The bt1120rx only supports 5bit integer crossover
+	 * frequency, in order to crossover frequency accurately, you need to
+	 * adjust the cpll frequency dynamically, so in the scenario of rk628d
+	 * bt1120rx, mount the pclk under gpll.
+	 */
 	rk628_i2c_read(rk628, GRF_SYSTEM_STATUS0, &val);
 	mcu_mode = (val & I2C_ONLY_FLAG) ? 0 : 1;
 	if (mcu_mode || rk628->version >= RK628F_VERSION) {
 		rk628_i2c_write(rk628, CRU_MODE_CON00, HIWORD_UPDATE(1, 4, 4));
+		/*
+		 * rk628d pclk use cpll by default, and frequency is 99MHz
+		 * rk628f pclk use gpll by default, and frequency is 98.304MHz
+		 */
+		if (rk628_input_is_bt1120(rk628)) {
+			/* set pclk use gpll, and set pclk 98.304Hz */
+			rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff0089);
+		}
 		return;
 	}
+	/* clock switch and first set gpll almost 99MHz */
 	rk628_i2c_write(rk628, CRU_GPLL_CON0, 0xffff701d);
 	mdelay(1);
+	/* set clk_gpll_mux from gpll */
 	rk628_i2c_write(rk628, CRU_MODE_CON00, 0xffff0004);
 	mdelay(1);
 	rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff0080);
+	/* set pclk use gpll, now div is 4 */
 	rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff0083);
+	/* set cpll almost 400MHz */
 	rk628_i2c_write(rk628, CRU_CPLL_CON0, 0xffff3063);
 	mdelay(1);
+	/* set clk_cpll_mux from clk_cpll */
 	rk628_i2c_write(rk628, CRU_MODE_CON00, 0xffff0005);
-	rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff0003);
-	rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff000b);
-	rk628_i2c_write(rk628, CRU_GPLL_CON0, 0xffff1028);
 	mdelay(1);
-	rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff008b);
-	rk628_i2c_write(rk628, CRU_CPLL_CON0, 0xffff1063);
-	mdelay(1);
-	rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff000b);
+	if (rk628_input_is_bt1120(rk628)) {
+		/* set pclk use cpll, now div is 4 */
+		rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff0003);
+		/* set pclk use cpll, now div is 10 */
+		rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff0009);
+		/* set gpll 983.04Hz */
+		rk628_i2c_write(rk628, CRU_GPLL_CON0, 0xffff1028);
+		mdelay(1);
+		/* set pclk use gpll, now div is 10 */
+		rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff0089);
+		/* set cpll 1188MHz */
+		rk628_i2c_write(rk628, CRU_CPLL_CON0, 0xffff1063);
+		/* final: cpll 1188MHz, gpll 983.04Hz, pclk (use gpll) 98.304Hz */
+	} else {
+		/* set pclk use cpll, now div is 4 */
+		rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff0003);
+		/* set pclk use cpll, now div is 12 */
+		rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff000b);
+		/* set gpll 983.04Hz */
+		rk628_i2c_write(rk628, CRU_GPLL_CON0, 0xffff1028);
+		mdelay(1);
+		/* set pclk use gpll, now div is 12 */
+		rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff008b);
+		/* set cpll 1188MHz */
+		rk628_i2c_write(rk628, CRU_CPLL_CON0, 0xffff1063);
+		mdelay(1);
+		/* set pclk use cpll, now div is 12 */
+		rk628_i2c_write(rk628, CRU_CLKSEL_CON00, 0x00ff000b);
+		/* final: cpll 1188MHz, gpll 983.04Hz, pclk (use cpll) 99Hz */
+	}
+}
+
+void rk628_cru_clk_adjust(struct rk628 *rk628)
+{
+	struct drm_display_mode *src = &rk628->src_mode;
+	const struct drm_display_mode *dst = &rk628->dst_mode;
+	u64 dst_rate, src_rate;
+	unsigned long dec_clk_rate;
+	u32 val;
+
+	/*
+	 * Try to keep cpll frequency close to 1188m (Tested bt1120rx and rk628f
+	 * hdmirx scenarios)
+	 */
+	if ((rk628_input_is_hdmi(rk628) && rk628->version != RK628D_VERSION) ||
+	    rk628_input_is_bt1120(rk628)) {
+		val = 1188000000UL / (src->clock * 1000);
+		if (rk628_input_is_bt1120(rk628) && val > (CLK_BT1120DEC_DIV_MAX + 1))
+			val = CLK_BT1120DEC_DIV_MAX + 1;
+		val *= src->clock * 1000;
+		rk628_cru_clk_set_rate(rk628, CGU_CLK_CPLL, val);
+		mdelay(50);
+		printf("adjust cpll to %uHz", val);
+	}
+
+	/*
+	 * BT1120 dec clk is a 5-bit integer division, which is inaccurate in
+	 * most resolutions. So if the frequency division is not accurate, apply
+	 * for a fault tolerance of up 2% in frequency setting, so that the
+	 * obtained frequency is slightly higher than the actual required clk,
+	 * so that the deviation between the actual clk and the required clk
+	 * frequency is not significant.
+	 */
+	if (rk628_input_is_bt1120(rk628)) {
+		rk628_cru_clk_set_rate(rk628, CGU_BT1120DEC, src->clock * 1000);
+		dec_clk_rate = rk628_cru_clk_get_rate(rk628, CGU_BT1120DEC);
+		if (dec_clk_rate < src->clock * 1000)
+			rk628_cru_clk_set_rate(rk628, CGU_BT1120DEC, src->clock * 1020);
+	}
+
+	src_rate = src->clock * 1000;
+	dst_rate = src_rate * dst->vtotal * dst->htotal;
+	do_div(dst_rate, (src->vtotal * src->htotal));
+	do_div(dst_rate, 1000);
+	printf("src %dx%d clock:%d\n",
+		 src->hdisplay, src->vdisplay, src->clock);
+
+	printf("dst %dx%d clock:%llu\n",
+		 dst->hdisplay, dst->vdisplay, dst_rate);
+
+	rk628_cru_clk_set_rate(rk628, CGU_CLK_RX_READ, src->clock * 1000);
+	rk628_cru_clk_set_rate(rk628, CGU_SCLK_VOP, dst_rate * 1000);
+}
+
+void rk628_cru_clk_pll_enable_ssc(struct rk628 *rk628, unsigned int id)
+{
+	u32 divval, val = 0, refdiv, mod_depth, mod_freq, offset;
+	bool down_spread;
+	char pll_name[5];
+
+	if (id == CGU_CLK_CPLL) {
+		offset = 0x00;
+		strncpy(pll_name, "cpll", sizeof(pll_name));
+	} else if (id == CGU_CLK_GPLL) {
+		offset = 0x20;
+		strncpy(pll_name, "gpll", sizeof(pll_name));
+	} else {
+		offset = 0x40;
+		strncpy(pll_name, "apll", sizeof(pll_name));
+	}
+
+	/* SSC operations require DSM to be enabled. */
+	rk628_i2c_write(rk628, offset + CRU_CPLL_CON1, PLL_DSMPD(0));
+
+	rk628_i2c_read(rk628, offset + CRU_CPLL_CON1, &val);
+	refdiv = (val & PLL_REFDIV_MASK) >> PLL_REFDIV_SHIFT;
+
+	/*
+	 * fmod = fclksscf / (divval * 128)
+	 *      = (fref / refdiv) / (divval * 128)
+	 * divval = fref / (refdiv * fmod * 128)
+	 */
+	divval = DIV_ROUND_CLOSEST(REFCLK_RATE, refdiv * rk628->ssc.mod_freq * 128);
+	if (divval > 15) {
+		printf("ssc divval %u overflow, clamped to 15\n", divval);
+		divval = 15;
+	} else if (!divval) {
+		printf("divval 0 invalid, ssc can't be enabled with this setting\n");
+		rk628_i2c_write(rk628, offset + CRU_CPLL_CON3, SSMOD_SPREAD(0) | SSMOD_DIVVAL(0) |
+				SSMOD_DOWNSPREAD(0) | SSMOD_RESET(1) | SSMOD_DISABLE_SSCG(1) |
+				SSMOD_BP(1));
+		return;
+	}
+
+	rk628_i2c_write(rk628, offset + CRU_CPLL_CON3, SSMOD_SPREAD(rk628->ssc.mod_depth) |
+			SSMOD_DIVVAL(divval) | SSMOD_DOWNSPREAD(rk628->ssc.down_spread) |
+			SSMOD_RESET(0) | SSMOD_DISABLE_SSCG(0) | SSMOD_BP(0));
+
+	/* read ssc mod config */
+	rk628_i2c_read(rk628, offset + CRU_CPLL_CON3, &val);
+	down_spread = !!((val & SSMOD_DOWNSPREAD_MASK) >> SSMOD_DOWNSPREAD_SHIFT);
+	mod_depth = (val & SSMOD_SPREAD_MASK) >> SSMOD_SPREAD_SHIFT;
+	divval = (val & SSMOD_DIVVAL_MASK) >> SSMOD_DIVVAL_SHIFT;
+	mod_freq = DIV_ROUND_CLOSEST(REFCLK_RATE, refdiv * divval * 128);
+	printf("enable %s ssc mod, %s, depth: %d.%d%%, freq:%d.%dkHz.\n", pll_name,
+	       down_spread ? "down spread" : "center spread", mod_depth / 10, mod_depth % 10,
+	       mod_freq / 1000, mod_freq % 1000);
+}
+
+void rk628_cru_clk_pll_disable_ssc(struct rk628 *rk628, unsigned int id)
+{
+	u32 offset;
+	char pll_name[5];
+
+	if (id == CGU_CLK_CPLL) {
+		offset = 0x00;
+		strncpy(pll_name, "cpll", sizeof(pll_name));
+	} else if (id == CGU_CLK_GPLL) {
+		offset = 0x20;
+		strncpy(pll_name, "gpll", sizeof(pll_name));
+	} else {
+		offset = 0x40;
+		strncpy(pll_name, "apll", sizeof(pll_name));
+	}
+
+	rk628_i2c_write(rk628, offset + CRU_CPLL_CON3, SSMOD_SPREAD(0) | SSMOD_DIVVAL(0) |
+			SSMOD_DOWNSPREAD(0) | SSMOD_RESET(1) | SSMOD_DISABLE_SSCG(1) | SSMOD_BP(1));
+	printf("disable %s ssc mod.\n", pll_name);
 }

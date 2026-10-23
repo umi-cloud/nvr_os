@@ -212,25 +212,12 @@ int mmc_set_blocklen(struct mmc *mmc, int len)
 {
 	struct mmc_cmd cmd;
 
-	if (mmc_card_ddr(mmc))
+	if (mmc_card_ddr(mmc) || !IS_SD(mmc))
 		return 0;
 
 	cmd.cmdidx = MMC_CMD_SET_BLOCKLEN;
 	cmd.resp_type = MMC_RSP_R1;
 	cmd.cmdarg = len;
-
-	return mmc_send_cmd(mmc, &cmd, NULL);
-}
-
-int mmc_set_blockcount(struct mmc *mmc, unsigned int blkcnt, bool is_rel_write)
-{
-	struct mmc_cmd cmd = {0};
-
-	cmd.cmdidx = MMC_CMD_SET_BLOCK_COUNT;
-	cmd.cmdarg = blkcnt & 0x0000FFFF;
-	if (is_rel_write)
-		cmd.cmdarg |= 1 << 31;
-	cmd.resp_type = MMC_RSP_R1;
 
 	return mmc_send_cmd(mmc, &cmd, NULL);
 }
@@ -276,19 +263,17 @@ static int mmc_read_blocks(struct mmc *mmc, void *dst, lbaint_t start,
 	return blkcnt;
 }
 
-#ifdef CONFIG_SPL_BLK_READ_PREPARE
+#if CONFIG_IS_ENABLED(BLK_READ_PREPARE)
 static int mmc_read_blocks_prepare(struct mmc *mmc, void *dst, lbaint_t start,
 				   lbaint_t blkcnt)
 {
 	struct mmc_cmd cmd;
 	struct mmc_data data;
 
-	if (blkcnt > 1) {
-		mmc_set_blockcount(mmc, blkcnt, false);
+	if (blkcnt > 1)
 		cmd.cmdidx = MMC_CMD_READ_MULTIPLE_BLOCK;
-	} else {
+	else
 		cmd.cmdidx = MMC_CMD_READ_SINGLE_BLOCK;
-	}
 
 	if (mmc->high_capacity)
 		cmd.cmdarg = start;
@@ -309,7 +294,7 @@ static int mmc_read_blocks_prepare(struct mmc *mmc, void *dst, lbaint_t start,
 }
 #endif
 
-#ifdef CONFIG_SPL_BLK_READ_PREPARE
+#if CONFIG_IS_ENABLED(BLK_READ_PREPARE)
 #if CONFIG_IS_ENABLED(BLK)
 ulong mmc_bread_prepare(struct udevice *dev, lbaint_t start, lbaint_t blkcnt, void *dst)
 #else
@@ -394,7 +379,7 @@ ulong mmc_bread(struct blk_desc *block_dev, lbaint_t start, lbaint_t blkcnt,
 	int err;
 	lbaint_t cur, blocks_todo = blkcnt;
 
-#ifdef CONFIG_SPL_BLK_READ_PREPARE
+#if CONFIG_IS_ENABLED(BLK_READ_PREPARE)
 	if (block_dev->op_flag == BLK_PRE_RW)
 #if CONFIG_IS_ENABLED(BLK)
 		return mmc_bread_prepare(dev, start, blkcnt, dst);
@@ -627,8 +612,9 @@ static int mmc_send_op_cond(struct mmc *mmc)
 static int mmc_complete_op_cond(struct mmc *mmc)
 {
 	struct mmc_cmd cmd;
-	int timeout = 1000;
-	uint start;
+	int timeout = 10000;
+	ulong start;
+
 	int err;
 
 	mmc->op_cond_pending = 0;

@@ -23,7 +23,6 @@
 #include "rockchip_crtc.h"
 #include "rockchip_connector.h"
 #include "dw_hdmi_qp.h"
-#include "rockchip_phy.h"
 
 enum frl_mask {
 	FRL_3GBPS_3LANE = 1,
@@ -95,6 +94,7 @@ struct dw_hdmi_qp {
 	int id;
 
 	unsigned long bus_format;
+	u32 refclk_rate;
 	bool cable_plugin;
 	bool sink_is_hdmi;
 	bool sink_has_audio;
@@ -116,6 +116,7 @@ struct dw_hdmi_qp {
 	unsigned int audio_n;
 	bool audio_enable;
 	bool scramble_low_rates;
+	bool skip_check_420_mode;
 
 	void (*write)(struct dw_hdmi_qp *hdmi, u32 val, int offset);
 	u8 (*read)(struct dw_hdmi_qp *hdmi, int offset);
@@ -291,11 +292,23 @@ drm_scdc_set_high_tmds_clock_ratio(struct ddc_adapter *adapter, bool set)
 
 static void dw_hdmi_i2c_init(struct dw_hdmi_qp *hdmi)
 {
+	u64 scl_high_cnt, scl_low_cnt, val;
+
+	scl_high_cnt = hdmi->i2c->scl_high_ns;
+	scl_low_cnt = hdmi->i2c->scl_low_ns;
+
+	scl_high_cnt = scl_high_cnt * hdmi->refclk_rate;
+	scl_high_cnt = DIV_ROUND_CLOSEST_ULL(scl_high_cnt, 1000000000);
+
+	scl_low_cnt = scl_low_cnt * hdmi->refclk_rate;
+	scl_low_cnt = DIV_ROUND_CLOSEST_ULL(scl_low_cnt, 1000000000);
+
+	val = (scl_high_cnt & 0xffff) << 16 | (scl_low_cnt & 0xffff);
+
 	/* Software reset */
 	hdmi_writel(hdmi, 0x01, I2CM_CONTROL0);
 
-	hdmi_writel(hdmi, 0x085c085c, I2CM_FM_SCL_CONFIG0);
-
+	hdmi_writel(hdmi, val, I2CM_SM_SCL_CONFIG0);
 	hdmi_modb(hdmi, 0, I2CM_FM_EN, I2CM_INTERFACE_CONTROL0);
 
 	/* Clear DONE and ERROR interrupts */
@@ -1134,7 +1147,7 @@ static int dw_hdmi_setup(struct dw_hdmi_qp *hdmi,
 	hdmi->hdmi_data.video_mode.mdataenablepolarity = true;
 
 	/* HDMI Initialization Step B.2 */
-	hdmi->phy.ops->set_pll(conn, hdmi->rk_hdmi, state);
+	hdmi->phy.ops->set_pll(conn, hdmi->rk_hdmi, state, 0);
 
 	/* Mark yuv422 10bit */
 	if (hdmi->hdmi_data.enc_out_bus_format == MEDIA_BUS_FMT_YUYV10_1X20)
@@ -1142,11 +1155,12 @@ static int dw_hdmi_setup(struct dw_hdmi_qp *hdmi,
 	dw_hdmi_qp_set_grf_cfg(hdmi->rk_hdmi);
 	link_cfg = dw_hdmi_rockchip_get_link_cfg(hdmi->rk_hdmi);
 
+	hdmi_modb(hdmi, HDCP2_BYPASS, HDCP2_BYPASS, HDCP2LOGIC_CONFIG0);
+
 	/* not for DVI mode */
 	if (hdmi->sink_is_hdmi) {
 		printf("%s HDMI mode\n", __func__);
 		hdmi_modb(hdmi, 0, OPMODE_DVI, LINK_CONFIG0);
-		hdmi_modb(hdmi, HDCP2_BYPASS, HDCP2_BYPASS, HDCP2LOGIC_CONFIG0);
 		hdmi_modb(hdmi, KEEPOUT_REKEY_ALWAYS, KEEPOUT_REKEY_CFG, FRAME_COMPOSER_CONFIG9);
 		hdmi_writel(hdmi, 0, FLT_CONFIG0);
 		if (hdmi_info->scdc.supported)
@@ -1226,6 +1240,8 @@ int rockchip_dw_hdmi_qp_init(struct rockchip_connector *conn, struct display_sta
 	struct drm_display_mode *mode_buf;
 	ofnode hdmi_node = conn->dev->node;
 	struct device_node *ddc_node;
+	struct clk ref_clk;
+	int ret;
 
 	hdmi = malloc(sizeof(struct dw_hdmi_qp));
 	if (!hdmi)
@@ -1245,6 +1261,9 @@ int rockchip_dw_hdmi_qp_init(struct rockchip_connector *conn, struct display_sta
 	memset(mode_buf, 0, MODE_LEN * sizeof(struct drm_display_mode));
 
 	hdmi->regs = dev_read_addr_ptr(conn->dev);
+
+	hdmi->skip_check_420_mode =
+		ofnode_read_bool(hdmi_node, "skip-check-420-mode");
 
 	ddc_node = of_parse_phandle(ofnode_to_np(hdmi_node), "ddc-i2c-bus", 0);
 	if (ddc_node) {
@@ -1270,7 +1289,6 @@ int rockchip_dw_hdmi_qp_init(struct rockchip_connector *conn, struct display_sta
 		ofnode_read_s32_default(hdmi_node,
 					"ddc-i2c-scl-low-time-ns", 4916);
 
-	dw_hdmi_i2c_init(hdmi);
 	conn_state->output_mode = ROCKCHIP_OUT_MODE_AAAA;
 
 	hdmi->dev_type = pdata->dev_type;
@@ -1280,9 +1298,19 @@ int rockchip_dw_hdmi_qp_init(struct rockchip_connector *conn, struct display_sta
 	conn->data = hdmi;
 
 	dw_hdmi_detect_phy(hdmi);
+
+	ret = clk_get_by_name(conn->dev, "hdmitx_ref", &ref_clk);
+	if (ret) {
+		printf("%s: hdmitx_ref may not define\n", __func__);
+		return -EINVAL;
+	}
+
+	hdmi->refclk_rate = clk_get_rate(&ref_clk);
 	hdmi_writel(hdmi, 0, MAINUNIT_0_INT_MASK_N);
 	hdmi_writel(hdmi, 0, MAINUNIT_1_INT_MASK_N);
-	hdmi_writel(hdmi, 428571429, TIMER_BASE_CONFIG0);
+	hdmi_writel(hdmi, hdmi->refclk_rate, TIMER_BASE_CONFIG0);
+
+	dw_hdmi_i2c_init(hdmi);
 
 	dw_hdmi_qp_io_path_init(hdmi->rk_hdmi);
 
@@ -1437,21 +1465,58 @@ int rockchip_dw_hdmi_qp_disable(struct rockchip_connector *conn, struct display_
 	return 0;
 }
 
+static bool is_hdmi2_mode(const struct drm_display_mode *mode)
+{
+	if (mode->clock > 340000 && mode->clock <= 600000)
+		return true;
+
+	return false;
+}
+
 static void rockchip_dw_hdmi_qp_mode_valid(struct dw_hdmi_qp *hdmi)
 {
 	struct hdmi_edid_data *edid_data = &hdmi->edid_data;
 	int i;
 	bool enable_gpio = dw_hdmi_qp_check_enable_gpio(hdmi->rk_hdmi);
+	struct drm_display_info *info = &edid_data->display_info;
+	int max_tmds_clock = min(info->max_tmds_clock, 594000);
+	struct drm_display_mode *mode;
+
+	/* some sinks edid max_tmds_clocks are 0, we think it only support hdmi1.4 */
+	if (!info->max_tmds_clock)
+		max_tmds_clock = 340000;
 
 	for (i = 0; i < edid_data->modes; i++) {
-		if (edid_data->mode_buf[i].invalid)
+		mode = &edid_data->mode_buf[i];
+		if (mode->invalid)
 			continue;
 
-		if (edid_data->mode_buf[i].clock <= 25000)
-			edid_data->mode_buf[i].invalid = true;
+		if (mode->clock <= 25000)
+			mode->invalid = true;
 
-		if (edid_data->mode_buf[i].clock > 600000 && !enable_gpio)
-			edid_data->mode_buf[i].invalid = true;
+		if (mode->clock > 600000 && !enable_gpio)
+			mode->invalid = true;
+
+		if (!hdmi->skip_check_420_mode) {
+			/* edid isn't support yuv420 and max_tmds_clock is less than mode pixel clk */
+			if (mode->clock < 600000 && max_tmds_clock < mode->clock &&
+				(!drm_mode_is_420(info, mode)))
+				mode->invalid = true;
+
+			/* edid isn't support yuv420 and hdmitx only support hdmi1.4 clk */
+			if (max_tmds_clock <= 340000 && is_hdmi2_mode(mode) &&
+				!drm_mode_is_420(info, mode))
+				mode->invalid = true;
+
+			/*
+			* hdmi cts hf1-31 required filtering yuv420 mode that frequency
+			* exceeds the max_tmds_clock of edid.
+			*/
+			if (drm_mode_is_420(info, mode) &&
+				max_tmds_clock < (mode->clock / 2) &&
+				is_hdmi2_mode(mode))
+				mode->invalid = true;
+		};
 	}
 }
 
@@ -1525,19 +1590,6 @@ int rockchip_dw_hdmi_qp_detect(struct rockchip_connector *conn, struct display_s
 		return -EFAULT;
 
 	ret = dw_hdmi_detect_hotplug(hdmi, state);
-
-	return ret;
-}
-
-int rockchip_dw_hdmi_qp_get_edid(struct rockchip_connector *conn, struct display_state *state)
-{
-	int ret = 0;
-	struct connector_state *conn_state = &state->conn_state;
-	struct dw_hdmi_qp *hdmi = conn->data;
-
-	conn_state->edid = drm_do_get_edid(&hdmi->adap);
-	if (!conn_state->edid)
-		ret = -EINVAL;
 
 	return ret;
 }

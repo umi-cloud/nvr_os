@@ -53,7 +53,7 @@ static ulong nfs_timeout = NFS_TIMEOUT;
 
 static char dirfh[NFS_FHSIZE];	/* NFSv2 / NFSv3 file handle of directory */
 static char filefh[NFS3_FHSIZE]; /* NFSv2 / NFSv3 file handle */
-static int filefh3_length;	/* (variable) length of filefh when NFSv3 */
+static unsigned int filefh3_length;	/* (variable) length of filefh when NFSv3 */
 
 static enum net_loop_state nfs_download_state;
 static struct in_addr nfs_server_ip;
@@ -566,6 +566,8 @@ static int nfs_lookup_reply(uchar *pkt, unsigned len)
 	}
 
 	if (supported_nfs_versions & NFSV2_FLAG) {
+		if (((uchar *)&(rpc_pkt.u.reply.data[0]) - (uchar *)(&rpc_pkt) + NFS_FHSIZE) > len)
+			return -NFS_RPC_DROP;
 		memcpy(filefh, rpc_pkt.u.reply.data + 1, NFS_FHSIZE);
 	} else {  /* NFSV3_FLAG */
 		filefh3_length = ntohl(rpc_pkt.u.reply.data[1]);
@@ -634,16 +636,23 @@ static int nfs_readlink_reply(uchar *pkt, unsigned len)
 	/* new path length */
 	rlen = ntohl(rpc_pkt.u.reply.data[1 + nfsv3_data_offset]);
 
+	if (((uchar *)&(rpc_pkt.u.reply.data[0]) - (uchar *)(&rpc_pkt) + rlen) > len)
+		return -NFS_RPC_DROP;
+
 	if (*((char *)&(rpc_pkt.u.reply.data[2 + nfsv3_data_offset])) != '/') {
 		int pathlen;
 
 		strcat(nfs_path, "/");
 		pathlen = strlen(nfs_path);
+		if (pathlen + rlen >= sizeof(nfs_path_buff))
+			return -NFS_RPC_DROP;
 		memcpy(nfs_path + pathlen,
 		       (uchar *)&(rpc_pkt.u.reply.data[2 + nfsv3_data_offset]),
 		       rlen);
 		nfs_path[pathlen + rlen] = 0;
 	} else {
+		if (rlen >= sizeof(nfs_path_buff))
+			return -NFS_RPC_DROP;
 		memcpy(nfs_path,
 		       (uchar *)&(rpc_pkt.u.reply.data[2 + nfsv3_data_offset]),
 		       rlen);
@@ -701,6 +710,9 @@ static int nfs_read_reply(uchar *pkt, unsigned len)
 			&(rpc_pkt.u.reply.data[4 + nfsv3_data_offset]);
 	}
 
+	if (((uchar *)&(rpc_pkt.u.reply.data[0]) - (uchar *)(&rpc_pkt) + rlen) > len)
+			return -9999;
+
 	if (store_block(data_ptr, nfs_offset, rlen))
 			return -9999;
 
@@ -731,6 +743,9 @@ static void nfs_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 	int reply;
 
 	debug("%s\n", __func__);
+
+	if (len > sizeof(struct rpc_t))
+		return;
 
 	if (dest != nfs_our_port)
 		return;

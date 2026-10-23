@@ -59,7 +59,12 @@ static int android_version_init(void)
 		return -1;
 
 	os_version = hdr->os_version;
-	if (os_version)
+	/* use max version 0x7f stands for GKI */
+	if ((os_version >> 25 & 0x7f) == 0x7f)
+		printf("Android GKI, Build %u.%u, v%d\n",
+		       ((os_version >> 4) & 0x7f) + 2000, os_version & 0x0F,
+		       hdr->header_version);
+	else if (os_version)
 		printf("Android %u.%u, Build %u.%u, v%d\n",
 		       (os_version >> 25) & 0x7f, (os_version >> 18) & 0x7F,
 		       ((os_version >> 4) & 0x7f) + 2000, os_version & 0x0F,
@@ -141,6 +146,16 @@ int android_image_init_resource(struct blk_desc *desc,
 
 static ulong android_image_get_kernel_addr(const struct andr_img_hdr *hdr)
 {
+#ifdef CONFIG_ARCH_ROCKCHIP
+	/*
+	 * If kernel is compressed, kernel_addr_r is the decompressed address
+	 * after compressed image being loaded to ram, so use it first.
+	 */
+	if (android_kernel_comp_type != IH_COMP_NONE &&
+	    android_kernel_comp_type != IH_COMP_ZIMAGE)
+		return env_get_ulong("kernel_addr_r", 16, 0);
+#endif
+
 	/*
 	 * All the Android tools that generate a boot.img use this
 	 * address as the default.
@@ -156,14 +171,6 @@ static ulong android_image_get_kernel_addr(const struct andr_img_hdr *hdr)
 		return (ulong)hdr + hdr->page_size;
 
 #ifdef CONFIG_ARCH_ROCKCHIP
-	/*
-	 * If kernel is compressed, kernel_addr is set as decompressed address
-	 * after compressed being loaded to ram, so let's use it.
-	 */
-	if (android_kernel_comp_type != IH_COMP_NONE &&
-	    android_kernel_comp_type != IH_COMP_ZIMAGE)
-		return hdr->kernel_addr;
-
 	/*
 	 * Compatble with rockchip legacy packing with kernel/ramdisk/second
 	 * address base from 0x60000000(SDK versiont < 8.1), these are invalid
@@ -210,9 +217,28 @@ int android_image_parse_kernel_comp(const struct andr_img_hdr *hdr)
 int android_image_get_kernel(const struct andr_img_hdr *hdr, int verify,
 			     ulong *os_data, ulong *os_len)
 {
-	u32 kernel_addr = android_image_get_kernel_addr(hdr);
-	const char *cmdline = hdr->header_version < 3 ?
-			      hdr->cmdline : hdr->total_cmdline;
+	ulong kernel_addr = android_image_get_kernel_addr(hdr);
+	/*
+	 * For header_version < 3, cmdline is split into:
+	 *   - cmdline[512] + extra_cmdline[1024]
+	 * For header_version >= 3, use total_cmdline directly.
+	 */
+	char *cmdline = NULL;
+	bool cmdline_alloced = false;
+	char *newbootargs = NULL;
+
+	if (hdr->header_version < 3) {
+		size_t cmdline_len = strlen(hdr->cmdline);
+		size_t extra_len = strlen(hdr->extra_cmdline);
+		cmdline = malloc(cmdline_len + extra_len + 1);
+		if (!cmdline)
+			return -ENOMEM;
+		strcpy(cmdline, hdr->cmdline);
+		strcpy(cmdline + cmdline_len, hdr->extra_cmdline);
+		cmdline_alloced = true;
+	} else {
+		cmdline = (char *)hdr->total_cmdline;
+	}
 	/*
 	 * Not all Android tools use the id field for signing the image with
 	 * sha1 (or anything) so we don't check it. It is not obvious that the
@@ -223,7 +249,7 @@ int android_image_get_kernel(const struct andr_img_hdr *hdr, int verify,
 	if (strlen(andr_tmp_str))
 		printf("Android's image name: %s\n", andr_tmp_str);
 
-	printf("Kernel: 0x%08x - 0x%08x (%u KiB)\n",
+	printf("Kernel: 0x%08lx - 0x%08lx (%u KiB)\n",
 	       kernel_addr, kernel_addr + hdr->kernel_size,
 	       DIV_ROUND_UP(hdr->kernel_size, 1024));
 
@@ -237,7 +263,7 @@ int android_image_get_kernel(const struct andr_img_hdr *hdr, int verify,
 	if (bootargs)
 		len += strlen(bootargs);
 
-	char *newbootargs = malloc(len + 2);
+	newbootargs = malloc(len + 2);
 	if (!newbootargs) {
 		puts("Error: malloc in android_image_get_kernel failed!\n");
 		return -ENOMEM;
@@ -259,6 +285,10 @@ int android_image_get_kernel(const struct andr_img_hdr *hdr, int verify,
 	}
 	if (os_len)
 		*os_len = hdr->kernel_size;
+
+	free(newbootargs);
+	if (cmdline_alloced)
+		free((char *)cmdline);
 	return 0;
 }
 
@@ -299,11 +329,6 @@ ulong android_image_get_end(const struct andr_img_hdr *hdr)
 u32 android_image_get_ksize(const struct andr_img_hdr *hdr)
 {
 	return hdr->kernel_size;
-}
-
-void android_image_set_kload(struct andr_img_hdr *hdr, u32 load_address)
-{
-	hdr->kernel_addr = load_address;
 }
 
 ulong android_image_get_kload(const struct andr_img_hdr *hdr)
@@ -721,6 +746,7 @@ static int android_image_separate(struct andr_img_hdr *hdr,
 		uchar hash[20];
 
 		/* rk crypto: requires total length before sha init */
+		sha1_ctx.hw_en_magic = SHA_HW_EN_MAGIC;
 		sha1_ctx.length = 0;
 		sha1_ctx.length += hdr->kernel_size + sizeof(hdr->kernel_size) +
 				hdr->ramdisk_size + sizeof(hdr->ramdisk_size) +
@@ -868,18 +894,13 @@ static ulong android_image_get_comp_addr(struct andr_img_hdr *hdr, int comp)
 
 void android_image_set_decomp(struct andr_img_hdr *hdr, int comp)
 {
-	ulong kernel_addr_r;
-
 	env_set_ulong("os_comp", comp);
 
 	/* zImage handles decompress itself */
-	if (comp != IH_COMP_NONE && comp != IH_COMP_ZIMAGE) {
-		kernel_addr_r = env_get_ulong("kernel_addr_r", 16, 0x02080000);
-		android_image_set_kload(hdr, kernel_addr_r);
+	if (comp != IH_COMP_NONE && comp != IH_COMP_ZIMAGE)
 		android_image_set_comp(hdr, comp);
-	} else {
+	else
 		android_image_set_comp(hdr, IH_COMP_NONE);
-	}
 }
 
 static int android_image_load_separate(struct andr_img_hdr *hdr,
@@ -1077,7 +1098,7 @@ extract_boot_image_v34_header(struct blk_desc *dev_desc,
 	if (boot_hdr->header_version >= 4 && boot_hdr->os_version == 0) {
 		if (part_get_info_by_name(dev_desc,
 				ANDROID_PARTITION_INIT_BOOT, &part) > 0)
-			boot_hdr->os_version = 13 << 25;
+			boot_hdr->os_version = 0x7f << 25;
 	}
 
 	return boot_hdr;

@@ -33,6 +33,7 @@
 #include <syscon.h>
 #include <sysmem.h>
 #include <video_rockchip.h>
+#include <vdisk.h>
 #include <xbc.h>
 #include <asm/io.h>
 #include <asm/gpio.h>
@@ -48,13 +49,15 @@
 #include <asm/arch/clock.h>
 #include <asm/arch/cpu.h>
 #include <asm/arch/hotkey.h>
+#include <asm/arch/mos.h>
 #include <asm/arch/param.h>
 #include <asm/arch/periph.h>
 #include <asm/arch/resource_img.h>
 #include <asm/arch/rk_atags.h>
+#include <asm/arch/rockchip_smccc.h>
 #include <asm/arch/vendor.h>
-#ifdef CONFIG_ROCKCHIP_EINK_DISPLAY
-#include <rk_eink.h>
+#ifdef CONFIG_ROCKCHIP_EBOOK_DISPLAY
+#include <rk_ebook.h>
 #endif
 #ifdef CONFIG_ROCKCHIP_MINIDUMP
 #include <rk_mini_dump.h>
@@ -92,6 +95,12 @@ __weak int soc_clk_dump(void)
 __weak int set_armclk_rate(void)
 {
 	return 0;
+}
+
+__weak bool rk_board_req_mem_layout1 (void)
+{
+	/* 128M is a typical ram size for most platform, so as default here */
+	return (gd->ram_size <= SZ_128M);
 }
 
 __weak int rk_board_init(void)
@@ -238,6 +247,14 @@ static int rockchip_set_serialno(void)
 
 		serialno = crc32_no_comp(0, low, 8);
 		serialno |= (u64)crc32_no_comp(serialno, high, 8) << 32;
+
+#ifdef CONFIG_MOS_SECONDARY
+		/*
+		 * Problem: In the MOS system, adb devices shows the same serialno.
+		 * Solution: The SECONDARY OS serialno is distinguished by adding 1.
+		 */
+		serialno += 1;
+#endif
 		snprintf(serialno_str, sizeof(serialno_str), "%llx", serialno);
 
 		env_set("serial#", serialno_str);
@@ -338,23 +355,25 @@ static int boot_from_udisk(void)
 static void env_fixup(void)
 {
 	struct memblock mem;
-	ulong u_addr_r;
+	ulong ramdisk_addr;
+	ulong optee_addr;
 	phys_size_t end;
 	char *addr_r;
 
 #ifdef ENV_MEM_LAYOUT_SETTINGS1
 	const char *env_addr0[] = {
-		"scriptaddr", "pxefile_addr_r",
-		"fdt_addr_r", "kernel_addr_r", "kernel_addr_c", "ramdisk_addr_r",
+		"scriptaddr", "pxefile_addr_r", "fdt_addr_r",
+		"kernel_addr_r", "kernel_addr_aarch32_r", "kernel_addr_c",
+		"ramdisk_addr_r",
 	};
 	const char *env_addr1[] = {
-		"scriptaddr1", "pxefile_addr1_r",
-		"fdt_addr1_r", "kernel_addr1_r", "kernel_addr1_c", "ramdisk_addr1_r",
+		"scriptaddr1", "pxefile_addr1_r", "fdt_addr1_r",
+		"kernel_addr1_r", "kernel_addr1_aarch32_r", "kernel_addr1_c",
+		"ramdisk_addr1_r",
 	};
 	int i;
 
-	/* 128M is a typical ram size for most platform, so as default here */
-	if (gd->ram_size <= SZ_128M) {
+	if (rk_board_req_mem_layout1()) {
 		/* Replace orignal xxx_addr_r */
 		for (i = 0; i < ARRAY_SIZE(env_addr1); i++) {
 			addr_r = env_get(env_addr1[i]);
@@ -363,6 +382,24 @@ static void env_fixup(void)
 		}
 	}
 #endif
+
+	/*
+	 * ramdisk_addr_low_r to handle the case:
+	 *
+	 * The 256MB board uses large ramdisk(i.e. 40MB+) on linux platform, it
+	 * may cause sysmem overlay(no memory) issue when run boot_fit command:
+	 *
+	 *	0       162MB                             256MB
+	 * 	[ ....... | ramdisk | fit boot.img | U-Boot ]
+	 *
+	 * Do this whether there is BL32 or not.
+	 */
+	if (gd->ram_size > SZ_128M && gd->ram_size <= SZ_256M) {
+		ramdisk_addr = env_get_ulong("ramdisk_addr_low_r", 16, 0);
+		if (ramdisk_addr)
+			env_set_hex("ramdisk_addr_r", ramdisk_addr);
+	}
+
 	/* No BL32 ? */
 	if (!(gd->flags & GD_FLG_BL32_ENABLED)) {
 		/*
@@ -375,7 +412,7 @@ static void env_fixup(void)
 		/*
 		 * [2] Move ramdisk at BL32 position if need.
 		 *
-		 * 0x0a200000 and 0x08400000 are rockchip traditional address
+		 * 0x0a200000 and 0x08400000 offset are rockchip traditional address
 		 * of BL32 and ramdisk:
 		 *
 		 * |------------|------------|
@@ -386,9 +423,11 @@ static void env_fixup(void)
 		 * issue on the board with critical memory(ie. 256MB).
 		 */
 		if (gd->ram_size > SZ_128M && gd->ram_size <= SZ_256M) {
-			u_addr_r = env_get_ulong("ramdisk_addr_r", 16, 0);
-			if (u_addr_r == 0x0a200000)
-				env_set("ramdisk_addr_r", "0x08400000");
+			ramdisk_addr = env_get_ulong("ramdisk_addr_r", 16, 0);
+			if (ramdisk_addr == CONFIG_SYS_SDRAM_BASE + 0x0a200000) {
+				optee_addr = CONFIG_SYS_SDRAM_BASE + 0x08400000;
+				env_set_hex("ramdisk_addr_r", optee_addr);
+			}
 		}
 	} else {
 		mem = param_parse_optee_mem();
@@ -406,8 +445,8 @@ static void env_fixup(void)
 		 * [2] Move ramdisk backward if optee enlarge.
 		 */
 		end = mem.base + mem.size;
-		u_addr_r = env_get_ulong("ramdisk_addr_r", 16, 0);
-		if (u_addr_r >= mem.base && u_addr_r < end)
+		ramdisk_addr = env_get_ulong("ramdisk_addr_r", 16, 0);
+		if (ramdisk_addr >= mem.base && ramdisk_addr < end)
 			env_set_hex("ramdisk_addr_r", end);
 	}
 }
@@ -489,7 +528,6 @@ int board_late_init(void)
 	rockchip_set_serialno();
 #endif
 	setup_download_mode();
-	scan_run_cmd();
 #ifdef CONFIG_ROCKCHIP_USB_BOOT
 	boot_from_udisk();
 #endif
@@ -507,8 +545,8 @@ int board_late_init(void)
 		rockchip_show_logo();
 #endif
 
-#ifdef CONFIG_ROCKCHIP_EINK_DISPLAY
-	rockchip_eink_show_uboot_logo();
+#ifdef CONFIG_ROCKCHIP_EBOOK_DISPLAY
+	rockchip_ebook_show_uboot_logo();
 #endif
 #if (CONFIG_ROCKCHIP_BOOT_MODE_REG > 0)
 	setup_boot_mode();
@@ -516,8 +554,12 @@ int board_late_init(void)
 	env_fixup();
 	soc_clk_dump();
 	cmdline_handle();
+	scan_run_cmd();
 #ifdef CONFIG_AMP
 	amp_cpus_on();
+#endif
+#if defined(CONFIG_MOS_SUPPORT) && !defined(CONFIG_MOS_SECONDARY)
+	mos_secondary_boot();
 #endif
 	return rk_board_late_init();
 }
@@ -565,8 +607,14 @@ int board_init(void)
 #ifdef DEBUG
 	soc_clk_dump();
 #endif
+#ifdef CONFIG_VIRTUAL_DISK
+	rvd_init();
+#endif
 #ifdef CONFIG_OPTEE_CLIENT
 	optee_client_init();
+#endif
+#ifdef CONFIG_MOS_SECONDARY
+	mos_secondary_wfe();
 #endif
 #ifdef CONFIG_USING_KERNEL_DTB
 	init_kernel_dtb();
@@ -686,7 +734,8 @@ int board_fdt_fixup(void *blob)
 	return rk_board_fdt_fixup(blob);
 }
 
-#if defined(CONFIG_ARM64_BOOT_AARCH32) || !defined(CONFIG_ARM64)
+int board_initr_caches_fixup(void)
+{
 /*
  * Common for OP-TEE:
  *	64-bit & 32-bit mode: share memory dcache is always enabled;
@@ -705,8 +754,7 @@ int board_fdt_fixup(void *blob)
  *
  * So 32-bit mode U-Boot should map OP-TEE share memory as dcache enabled.
  */
-int board_initr_caches_fixup(void)
-{
+#if defined(CONFIG_ARM64_BOOT_AARCH32) || !defined(CONFIG_ARM64)
 #ifdef CONFIG_OPTEE_CLIENT
 	struct memblock mem;
 
@@ -718,9 +766,16 @@ int board_initr_caches_fixup(void)
 		mmu_set_region_dcache_behaviour(mem.base, mem.size,
 						DCACHE_WRITEBACK);
 #endif
+#endif
+#ifdef CONFIG_PSTORE
+	debug("mapping memory 0x%lx-0x%lx non-cached\n", gd->pstore_addr,
+	      gd->pstore_addr + gd->pstore_size);
+	mmu_set_region_dcache_behaviour(gd->pstore_addr, gd->pstore_size,
+					DCACHE_OFF);
+#endif
+
 	return 0;
 }
-#endif
 
 void arch_preboot_os(uint32_t bootm_state, bootm_headers_t *images)
 {
@@ -817,6 +872,7 @@ void board_lmb_reserve(struct lmb *lmb)
 #endif
 
 #ifdef CONFIG_BIDRAM
+#if !defined(CONFIG_MOS_SUPPORT)
 int board_bidram_reserve(struct bidram *bidram)
 {
 	struct memblock mem;
@@ -842,6 +898,7 @@ int board_bidram_reserve(struct bidram *bidram)
 
 	return 0;
 }
+#endif
 
 #ifdef CONFIG_SYSMEM
 int board_sysmem_reserve(struct sysmem *sysmem)
@@ -872,7 +929,9 @@ int board_init_f_boot_flags(void)
 #else
 	asm volatile("mrc p15, 0, %0, c14, c0, 0" : "=r" (gd->arch.timer_rate_hz));
 #endif
-
+#if defined(CONFIG_MOS_SUPPORT) && !defined(CONFIG_MOS_SECONDARY)
+	mos_set_boot_stage(MOS_BS_UBOOT_RUN);
+#endif
 #if CONFIG_IS_ENABLED(FPGA_ROCKCHIP)
 	arch_fpga_init();
 #endif
@@ -1033,10 +1092,12 @@ int bootm_board_start(void)
 
 int bootm_image_populate_dtb(void *img)
 {
-	if ((gd->flags & GD_FLG_KDTB_READY) && !gd->fdt_blob_kern)
+	ulong fdt_addr_r = env_get_ulong("fdt_addr_r", 16, 0);
+
+	if ((gd->flags & GD_FLG_KDTB_READY) && gd->fdt_blob == (void *)fdt_addr_r)
 		sysmem_free((phys_addr_t)gd->fdt_blob);
 	else
-		gd->fdt_blob = (void *)env_get_ulong("fdt_addr_r", 16, 0);
+		gd->fdt_blob = (void *)fdt_addr_r;
 
 	return rockchip_ram_read_dtb_file(img, (void *)gd->fdt_blob);
 }
@@ -1157,24 +1218,31 @@ void autoboot_command_fail_handle(void)
 
 #define FIT_ROLLBACK_INDEX_LOCATION	0x66697472	/* "fitr" */
 
-int fit_read_otp_rollback_index(uint32_t fit_index, uint32_t *otp_index)
+int fit_read_dev_rollback_index(uint32_t fit_index, uint32_t *dev_index)
 {
 #ifdef CONFIG_OPTEE_CLIENT
 	u64 index;
 	int ret;
 
+  #if defined(CONFIG_MOS_SUPPORT) && defined(CONFIG_MOS_SECONDARY)
+	u32 index32;
+
+	ret = trusty_read_otp_rollback(&index32);
+	index = index32;
+  #else
 	ret = trusty_read_rollback_index(FIT_ROLLBACK_INDEX_LOCATION, &index);
+  #endif
 	if (ret) {
 		if (ret != TEE_ERROR_ITEM_NOT_FOUND)
 			return ret;
 
 		index = 0;
-		printf("Initial otp index as %d\n", fit_index);
+		printf("Initial device index as %d\n", fit_index);
 	}
 
-	*otp_index = (uint32_t)index;
+	*dev_index = (uint32_t)index;
 #else
-	*otp_index = 0;
+	*dev_index = 0;
 #endif
 
 	return 0;
@@ -1185,8 +1253,12 @@ int fit_write_trusty_rollback_index(u32 trusty_index)
 	if (!trusty_index)
 		return 0;
 #ifdef CONFIG_OPTEE_CLIENT
+  #if defined(CONFIG_MOS_SUPPORT) && defined(CONFIG_MOS_SECONDARY)
+	return trusty_write_otp_rollback(trusty_index);
+  #else
 	return trusty_write_rollback_index(FIT_ROLLBACK_INDEX_LOCATION,
 					   (u64)trusty_index);
+  #endif
 #else
 	return 0;
 #endif
@@ -1226,8 +1298,19 @@ void board_quiesce_devices(void *images)
 
 	hotkey_run(HK_CMDLINE);
 	hotkey_run(HK_CLI_OS_GO);
+
 #ifdef CONFIG_ROCKCHIP_REBOOT_TEST
+	ulong us, tt_us;
+
+	us = (get_ticks() - gd->sys_start_tick) / (gd->arch.timer_rate_hz / 1000000);
+	tt_us = get_ticks() / (gd->arch.timer_rate_hz / 1000000);
+	printf("Total(reboot): %ld.%ld/%ld.%ld ms\n", us / 1000, us % 1000, tt_us / 1000, tt_us % 1000);
+
+	mdelay(1000);
 	do_reset(NULL, 0, 0, NULL);
+#endif
+#if defined(CONFIG_MOS_SUPPORT) && !defined(CONFIG_MOS_SECONDARY)
+	mos_set_boot_stage(MOS_BS_UBOOT_EXIT);
 #endif
 }
 
@@ -1301,8 +1384,8 @@ static void bootargs_add_fwver(bool verbose)
 	strcat(list2, "-");
 #endif
 	/* optional */
-	if (strcmp(PLAIN_VERSION, "2017.09")) {
-		strncat(list2, p + strlen("2017.09-g"), 10);
+	if (strcmp(PLAIN_VERSION, "next-dev")) {
+		strncat(list2, p + strlen("next-dev-g"), 10);
 		strcat(list2, "-");
 	}
 	strcat(list2, U_BOOT_DMI_DATE);
@@ -1460,6 +1543,7 @@ char *board_fdt_chosen_bootargs(void *fdt)
 	bootargs_add_dtb_dtbo(fdt, verbose);
 	bootargs_add_partition(verbose);
 	bootargs_add_fwver(verbose);
+	/* WARNING: Must be the last one to handle all "androidboot.xxx" property */
 	bootargs_add_android(verbose);
 
 	/*
@@ -1568,4 +1652,3 @@ int ft_verify_fdt(void *fdt)
 #endif
 	return 1;
 }
-

@@ -28,6 +28,7 @@
 #include <asm/gpio.h>
 #include <dm/device.h>
 #include <dm/read.h>
+#include <dm/of_access.h>
 #include <dm/pinctrl.h>
 #include <dm/uclass-id.h>
 #include <dm/lists.h>
@@ -39,12 +40,13 @@
 #include <asm/gpio.h>
 #include <asm/system.h>
 #include <asm/io.h>
-
 #include "gpio.h"
 
 #include "../drivers/video/drm/rockchip_bridge.h"
 #include "../drivers/video/drm/rockchip_display.h"
 #include "../drivers/video/drm/rockchip_panel.h"
+#include "../drivers/video/drm/rockchip_connector.h"
+#include "../drivers/video/drm/rockchip_crtc.h"
 
 #ifndef __SERDES_DISPLAY_CORE_H__
 #define __SERDES_DISPLAY_CORE_H__
@@ -71,8 +73,12 @@
 #define  SERDES_DBG_CHIP(x...)
 #endif
 
-#define SERDES_UBOOT_DISPLAY_VERSION "serdes-uboot-displaly-v10-230920"
-#define MAX_NUM_SERDES_SPLIT 8
+#define SERDES_UBOOT_DISPLAY_VERSION		"serdes-uboot-displaly-v10-230920"
+#define MAX_NUM_SERDES_SPLIT			8
+
+#define SERDES_CHECK_DEPTH			2
+#define SERDES_ATTACH_DEPTH			4
+
 struct serdes;
 
 enum ser_link_mode {
@@ -121,7 +127,7 @@ struct group_desc {
  */
 struct function_desc {
 	const char *name;
-	const char **group_names;
+	const char *const *group_names;
 	int num_group_names;
 	void *data;
 };
@@ -257,6 +263,7 @@ struct serdes_panel {
 	u32 height_mm;
 	u32 link_rate;
 	u32 lane_count;
+	u32 bus_format;
 	bool ssc;
 	struct serdes *parent;
 	struct drm_display_mode mode;
@@ -272,6 +279,7 @@ struct serdes_panel_split {
 	u32 height_mm;
 	u32 link_rate;
 	u32 lane_count;
+	u32 bus_format;
 	bool ssc;
 	struct serdes *parent;
 	struct drm_display_mode mode;
@@ -280,15 +288,26 @@ struct serdes_panel_split {
 };
 
 struct serdes_bridge {
+	u32 channel;
+	u32 lanes;
+	u32 format;
+	u32 flags;
 	bool sel_mipi;
+	bool split_mode;
 	struct mipi_dsi_device *dsi;
 	struct serdes *parent;
 	struct drm_display_mode mode;
 	struct rockchip_bridge *bridge;
+	struct rockchip_bridge *bridge_split;
+	struct rockchip_panel *panel_split;
 	struct rockchip_bridge_funcs *bridge_ops;
 };
 
 struct serdes_bridge_split {
+	u32 channel;
+	u32 lanes;
+	u32 format;
+	u32 flags;
 	bool sel_mipi;
 	struct mipi_dsi_device *dsi;
 	struct serdes *parent;
@@ -316,10 +335,10 @@ struct serdes {
 	int err_irq_trig;
 
 	bool sel_mipi;
+	bool dual_link;
 	bool mcu_enable;
 	struct mipi_dsi_device *dsi;
 
-	bool split_mode_enable;
 	unsigned int reg_hw;
 	unsigned int reg_use;
 	unsigned int link_use;
@@ -333,6 +352,13 @@ struct serdes {
 	struct serdes_panel_split *serdes_panel_split;
 	struct serdes_pinctrl *serdes_pinctrl;
 	struct serdes_chip_data *chip_data;
+};
+
+struct serdes_route_entry {
+	struct list_head list;
+	ofnode prev_node;
+	ofnode node;
+	u32 fbd_mode;
 };
 
 /* Device I/O API */
@@ -355,10 +381,15 @@ int serdes_power_init(void);
 int serdes_video_bridge_init(void);
 int serdes_video_bridge_split_init(void);
 int serdes_display_init(void);
+void serdes_get_split_bridge_or_panel(struct serdes_bridge *serdes_bridge);
+int serdes_set_i2c_address(struct serdes *serdes, u32 reg_use, int link);
+int serdes_route_bind(const struct udevice_id *match);
+int serdes_get_route_mode(ofnode node, u32 *mode);
 
 extern struct serdes_chip_data serdes_bu18tl82_data;
 extern struct serdes_chip_data serdes_bu18rl82_data;
 extern struct serdes_chip_data serdes_max96745_data;
+extern struct serdes_chip_data serdes_max96749_data;
 extern struct serdes_chip_data serdes_max96752_data;
 extern struct serdes_chip_data serdes_max96755_data;
 extern struct serdes_chip_data serdes_max96772_data;

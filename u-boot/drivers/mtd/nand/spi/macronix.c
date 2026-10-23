@@ -298,39 +298,28 @@ static const struct spinand_info macronix_spinand_table[] = {
 		     SPINAND_HAS_QE_BIT,
 		     SPINAND_ECCINFO(&mx35lfxge4ab_ooblayout,
 				     mx35lf1ge4ab_ecc_get_status)),
-	SPINAND_INFO("MX35UF1GE4AD",
-		     SPINAND_ID(SPINAND_READID_METHOD_OPCODE_DUMMY, 0x96),
-		     NAND_MEMORG(1, 2048, 64, 64, 1024, 1, 1, 1),
-		     NAND_ECCREQ(8, 512),
-		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
-					      &write_cache_variants,
-					      &update_cache_variants),
-		     SPINAND_HAS_QE_BIT,
-		     SPINAND_ECCINFO(&mx35lfxge4ab_ooblayout,
-				     mx35lf1ge4ab_ecc_get_status)),
-	SPINAND_INFO("MX35UF2GE4AD",
-		     SPINAND_ID(SPINAND_READID_METHOD_OPCODE_DUMMY, 0xA6),
-		     NAND_MEMORG(1, 2048, 64, 64, 2048, 1, 1, 1),
-		     NAND_ECCREQ(8, 512),
-		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
-					      &write_cache_variants,
-					      &update_cache_variants),
-		     SPINAND_HAS_QE_BIT,
-		     SPINAND_ECCINFO(&mx35lfxge4ab_ooblayout,
-				     mx35lf1ge4ab_ecc_get_status)),
-	SPINAND_INFO("MX35UF4GE4AD",
-		     SPINAND_ID(SPINAND_READID_METHOD_OPCODE_DUMMY, 0xB7),
-		     NAND_MEMORG(1, 4096, 128, 64, 2048, 1, 1, 1),
-		     NAND_ECCREQ(8, 512),
-		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
-					      &write_cache_variants,
-					      &update_cache_variants),
-		     SPINAND_HAS_QE_BIT,
-		     SPINAND_ECCINFO(&mx35lfxge4ab_ooblayout,
-				     mx35lf1ge4ab_ecc_get_status)),
 };
 
+static int macronix_spinand_init(struct spinand_device *spinand)
+{
+	/* Enable continuous read */
+#ifdef CONFIG_SPI_NAND_CONT_READ
+	if (spinand->id.data[1] == 0x96 || spinand->id.data[1] == 0xa6 || spinand->id.data[1] == 0xb7) {
+#ifdef CONFIG_SPL_BUILD
+		spinand->support_cont_read = true;
+		spinand_upd_cfg(spinand, CFG_CONT_ENABLE, CFG_CONT_ENABLE);
+		printf("Support cont_read\n");
+#else
+		spinand_upd_cfg(spinand, CFG_CONT_ENABLE, 0);
+#endif
+	}
+#endif
+
+	return 0;
+}
+
 static const struct spinand_manufacturer_ops macronix_spinand_manuf_ops = {
+	.init = macronix_spinand_init,
 };
 
 const struct spinand_manufacturer macronix_spinand_manufacturer = {

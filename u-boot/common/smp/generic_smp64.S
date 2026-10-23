@@ -10185,7 +10185,7 @@ tid_name:
 .LASF38:
 	.string	"name"
 .LASF277:
-	.string	"UCLASS_EINK_DISPLAY"
+	.string	"UCLASS_EBOOK_DISPLAY"
 .LASF227:
 	.string	"UCLASS_PANEL_BACKLIGHT"
 .LASF416:

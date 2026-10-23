@@ -710,6 +710,7 @@ static int rk8xx_ofdata_to_platdata(struct udevice *dev)
 	rk8xx->rst_fun = dev_read_u32_default(dev, "pmic-reset-func", 0);
 	/* buck5 external feedback resister disable */
 	rk8xx->buck5_feedback_dis = dev_read_bool(dev, "buck5-feedback-disable");
+	rk8xx->pwron_on_time = dev_read_bool(dev, "pwron-on-time-500ms");
 
 	rk8xx->pwr_ctr[0] = dev_read_u32_default(dev, "pwrctrl1_output", -1);
 	rk8xx->pwr_ctr[1] = dev_read_u32_default(dev, "pwrctrl2_output", -1);
@@ -869,6 +870,24 @@ static int rk8xx_probe(struct udevice *dev)
 		lp_off_msk = RK8XX_LP_OFF_MSK;
 		break;
 	case RK805_ID:
+		if ((lsb & RK805B_CHIP_VER_MSK) >= RK805B_CHIP_VER_NUM) {
+			ret = rk8xx_read(dev, RK805B_VSELTABLE_REG, &value, 1);
+			if (ret) {
+				dev_err(dev, "rk805B RK805B_VSELTABLE_REG read error: %d\n", ret);
+				return ret;
+			}
+			priv->vsel_table = value & RK805B_VSELTABLE_4OR8;
+
+			if (priv->vsel_table) {
+				if ((priv->rst_fun > RK8xx_RST_MODE0) &&
+				    (priv->rst_fun <= RK8xx_RST_MODE2)) {
+					rk8xx_read(dev, RK805B_PMIC_SYS_CFG2, &value, 1);
+					value &= RK8xx_RESET_FUN_CLR;
+					value |= (priv->rst_fun << 6);
+					rk8xx_write(dev, RK805B_PMIC_SYS_CFG2, &value, 1);
+				}
+			}
+		}
 	case RK816_ID:
 		on_source = RK8XX_ON_SOURCE;
 		off_source = RK8XX_OFF_SOURCE;
@@ -953,6 +972,15 @@ static int rk8xx_probe(struct udevice *dev)
 			rk8xx_write(dev, RK817_POWER_EN_SAVE0, &value, 1);
 			value = (power_en2 & 0x0f) | ((power_en3 & 0x0f) << 4);
 			rk8xx_write(dev, RK817_POWER_EN_SAVE1, &value, 1);
+		}
+		if (priv->pwron_on_time) {
+			ret = rk8xx_read(dev, RK817_PWRON_KEY, &value, 1);
+			if (ret)
+				return ret;
+			value &= (~0x80);
+			ret = rk8xx_write(dev, RK817_PWRON_KEY, &value, 1);
+			if (ret)
+				return ret;
 		}
 		break;
 	default:

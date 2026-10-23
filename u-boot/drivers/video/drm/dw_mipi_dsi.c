@@ -18,12 +18,16 @@
 #include <syscon.h>
 #include <asm/arch-rockchip/clock.h>
 #include <linux/iopoll.h>
+#include <linux/time.h>
+#include <generic-phy.h>
+#include <phy-mipi-dphy.h>
 
 #include "rockchip_display.h"
 #include "rockchip_crtc.h"
 #include "rockchip_connector.h"
 #include "rockchip_panel.h"
-#include "rockchip_phy.h"
+
+#define USEC_PER_SEC		1000000L
 
 #define UPDATE(v, h, l)		(((v) << (l)) & GENMASK((h), (l)))
 
@@ -223,7 +227,7 @@ struct dw_mipi_dsi_plat_data {
 
 struct mipi_dphy {
 	/* Non-SNPS PHY */
-	struct rockchip_phy *phy;
+	struct phy phy;
 
 	u16 input_div;
 	u16 feedback_div;
@@ -249,6 +253,8 @@ struct dw_mipi_dsi {
 	bool data_swap;
 	bool dual_channel;
 	bool disable_hold_mode;
+
+	struct phy_configure_opts_mipi_dphy phy_opts;
 
 	const struct dw_mipi_dsi_plat_data *pdata;
 };
@@ -471,10 +477,7 @@ static int mipi_dphy_power_on(struct dw_mipi_dsi *dsi)
 	mipi_dphy_rstz_deassert(dsi);
 	mdelay(2);
 
-	if (dsi->dphy.phy) {
-		rockchip_phy_set_mode(dsi->dphy.phy, PHY_MODE_MIPI_DPHY);
-		rockchip_phy_power_on(dsi->dphy.phy);
-	}
+	generic_phy_power_on(&dsi->dphy.phy);
 
 	ret = readl_poll_timeout(dsi->base + DSI_PHY_STATUS,
 				 val, val & PHY_LOCK, PHY_STATUS_TIMEOUT_US);
@@ -547,35 +550,42 @@ static void dw_mipi_dsi_phy_init(struct dw_mipi_dsi *dsi)
 static unsigned long dw_mipi_dsi_get_lane_rate(struct dw_mipi_dsi *dsi)
 {
 	const struct drm_display_mode *mode = &dsi->mode;
-	unsigned long max_lane_rate = dsi->pdata->max_bit_rate_per_lane;
+	unsigned int max_lane_rate = dsi->pdata->max_bit_rate_per_lane / 1000000;
 	unsigned long lane_rate;
+	unsigned long mpclk;
+	unsigned long target_pclk;
+	unsigned long tmp;
 	unsigned int value;
 	int bpp, lanes;
-	u64 tmp;
-
-	/* optional override of the desired bandwidth */
-	value = dev_read_u32_default(dsi->dev, "rockchip,lane-rate", 0);
-	if (value > 0)
-		return value * 1000 * 1000;
 
 	bpp = mipi_dsi_pixel_format_to_bpp(dsi->format);
 	if (bpp < 0)
 		bpp = 24;
 
 	lanes = dsi->slave ? dsi->lanes * 2 : dsi->lanes;
-	tmp = (u64)mode->clock * 1000 * bpp;
-	do_div(tmp, lanes);
 
-	/* take 1 / 0.9, since mbps must big than bandwidth of RGB */
-	tmp *= 10;
-	do_div(tmp, 9);
+	/* optional override of the desired bandwidth */
+	value = dev_read_u32_default(dsi->dev, "rockchip,lane-rate", 0);
+	if (value >= 80 && value <= 4500) {
+		lane_rate = value;
+	} else {
+		mpclk = DIV_ROUND_UP(mode->clock, 1000);
+		/* take 1 / 0.9, since mbps must big than bandwidth of RGB */
+		tmp = mpclk * (bpp / lanes) * 10 / 9;
 
-	if (tmp > max_lane_rate)
-		lane_rate = max_lane_rate;
-	else
-		lane_rate = tmp;
+		if (tmp > max_lane_rate)
+			lane_rate = max_lane_rate;
+		else
+			lane_rate = tmp;
+	}
 
-	return lane_rate;
+	target_pclk = DIV_ROUND_CLOSEST_ULL(lane_rate * lanes, bpp);
+
+	phy_mipi_dphy_get_default_config(target_pclk * USEC_PER_SEC,
+					 bpp, lanes,
+					 &dsi->phy_opts);
+
+	return dsi->phy_opts.hs_clk_rate;
 }
 
 static void dw_mipi_dsi_set_pll(struct dw_mipi_dsi *dsi, unsigned long rate)
@@ -942,8 +952,7 @@ static void dw_mipi_dsi_post_disable(struct dw_mipi_dsi *dsi)
 	dsi_write(dsi, DSI_PWR_UP, RESET);
 	dsi_write(dsi, DSI_PHY_RSTZ, 0);
 
-	if (dsi->dphy.phy)
-		rockchip_phy_power_off(dsi->dphy.phy);
+	generic_phy_power_off(&dsi->dphy.phy);
 
 	dsi->prepared = false;
 
@@ -1095,7 +1104,6 @@ static int dw_mipi_dsi_connector_init(struct rockchip_connector *conn, struct di
 	struct dw_mipi_dsi *dsi = dev_get_priv(conn->dev);
 
 	conn_state->disp_info  = rockchip_get_disp_info(conn_state->type, dsi->id);
-	dsi->dphy.phy = conn->phy;
 
 	conn_state->output_mode = ROCKCHIP_OUT_MODE_P888;
 	conn_state->color_encoding = DRM_COLOR_YCBCR_BT709;
@@ -1159,7 +1167,6 @@ static int dw_mipi_dsi_connector_init(struct rockchip_connector *conn, struct di
 		conn_state->output_if |= VOP_OUTPUT_IF_MIPI1;
 
 #if defined(CONFIG_ROCKCHIP_RK3568)
-		struct rockchip_phy *phy = NULL;
 		struct udevice *phy_dev;
 
 		ret = uclass_get_device_by_phandle(UCLASS_PHY, dev,
@@ -1167,13 +1174,9 @@ static int dw_mipi_dsi_connector_init(struct rockchip_connector *conn, struct di
 		if (ret)
 			return -ENODEV;
 
-		phy = (struct rockchip_phy *)dev_get_driver_data(phy_dev);
-		if (!phy)
+		generic_phy_get_by_name(dev, "dphy", &dsi->slave->dphy.phy);
+		if (!generic_phy_valid(&dsi->slave->dphy.phy))
 			return -ENODEV;
-
-		dsi->slave->dphy.phy = phy;
-		if (phy->funcs && phy->funcs->init)
-			return phy->funcs->init(phy);
 #endif
 
 	}
@@ -1181,10 +1184,11 @@ static int dw_mipi_dsi_connector_init(struct rockchip_connector *conn, struct di
 	return 0;
 }
 
-static void dw_mipi_dsi_set_hs_clk(struct dw_mipi_dsi *dsi, unsigned long rate)
+static void dw_mipi_dsi_set_hs_clk(struct dw_mipi_dsi *dsi)
 {
-	rate = rockchip_phy_set_pll(dsi->dphy.phy, rate);
-	dsi->lane_mbps = rate / 1000 / 1000;
+	generic_phy_set_mode(&dsi->dphy.phy, PHY_MODE_MIPI_DPHY);
+	generic_phy_configure(&dsi->dphy.phy, (union phy_configure_opts *)&dsi->phy_opts);
+	dsi->lane_mbps = dsi->phy_opts.hs_clk_rate / 1000 / 1000;
 }
 
 static void dw_mipi_dsi_host_init(struct dw_mipi_dsi *dsi)
@@ -1235,7 +1239,7 @@ static void mipi_dphy_init(struct dw_mipi_dsi *dsi)
 
 	testif_testclr_deassert(dsi);
 
-	if (!dsi->dphy.phy)
+	if (!generic_phy_valid(&dsi->dphy.phy))
 		dw_mipi_dsi_phy_init(dsi);
 
 	/* Enable Data Lane Module */
@@ -1282,13 +1286,13 @@ static int dw_mipi_dsi_connector_prepare(struct rockchip_connector *conn,
 	}
 
 	lane_rate = dw_mipi_dsi_get_lane_rate(dsi);
-	if (dsi->dphy.phy)
-		dw_mipi_dsi_set_hs_clk(dsi, lane_rate);
+	if (generic_phy_valid(&dsi->dphy.phy))
+		dw_mipi_dsi_set_hs_clk(dsi);
 	else
 		dw_mipi_dsi_set_pll(dsi, lane_rate);
 
-	if (dsi->slave && dsi->slave->dphy.phy)
-		dw_mipi_dsi_set_hs_clk(dsi->slave, lane_rate);
+	if (dsi->slave && generic_phy_valid(&dsi->slave->dphy.phy))
+		dw_mipi_dsi_set_hs_clk(dsi->slave);
 
 	printf("final DSI-Link bandwidth: %u Mbps x %d\n",
 	       dsi->lane_mbps, dsi->slave ? dsi->lanes * 2 : dsi->lanes);
@@ -1357,6 +1361,9 @@ static int dw_mipi_dsi_probe(struct udevice *dev)
 	dsi->dual_channel = dev_read_bool(dsi->dev, "rockchip,dual-channel");
 	dsi->data_swap = dev_read_bool(dsi->dev, "rockchip,data-swap");
 	dsi->disable_hold_mode = dev_read_bool(dsi->dev, "disable-hold-mode");
+
+	generic_phy_get_by_name(dev, "dphy", &dsi->dphy.phy);
+	generic_phy_init(&dsi->dphy.phy);
 
 	rockchip_connector_bind(&dsi->connector, dev, dsi->id, &dw_mipi_dsi_connector_funcs, NULL,
 				DRM_MODE_CONNECTOR_DSI);
@@ -1556,6 +1563,18 @@ static const struct dw_mipi_dsi_plat_data rk3568_mipi_dsi_plat_data = {
 	.max_bit_rate_per_lane = 1200000000UL,
 };
 
+static const u32 rk3572_dsi0_grf_reg_fields[MAX_FIELDS] = {
+	[SKEWCALHS]		= GRF_REG_FIELD(0x1060c, 5, 9),
+	[TURNDISABLE]		= GRF_REG_FIELD(0x1060c, 4, 4),
+	[FORCETXSTOPMODE]	= GRF_REG_FIELD(0x1060c, 3, 3),
+	[FORCERXMODE]		= GRF_REG_FIELD(0x1060c, 2, 2),
+};
+
+static const struct dw_mipi_dsi_plat_data rk3572_mipi_dsi_plat_data = {
+	.dsi0_grf_reg_fields = rk3572_dsi0_grf_reg_fields,
+	.max_bit_rate_per_lane = 1800000000UL,
+};
+
 static const u32 rv1108_dsi_grf_reg_fields[MAX_FIELDS] = {
 	[DPICOLORM]		= GRF_REG_FIELD(0x0410,  7,  7),
 	[DPISHUTDN]		= GRF_REG_FIELD(0x0410,  6,  6),
@@ -1638,6 +1657,10 @@ static const struct udevice_id dw_mipi_dsi_ids[] = {
 	{
 		.compatible = "rockchip,rk3568-mipi-dsi",
 		.data = (ulong)&rk3568_mipi_dsi_plat_data,
+	},
+	{
+		.compatible = "rockchip,rk3572-mipi-dsi",
+		.data = (ulong)&rk3572_mipi_dsi_plat_data,
 	},
 	{
 		.compatible = "rockchip,rv1108-mipi-dsi",

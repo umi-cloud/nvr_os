@@ -50,10 +50,16 @@ config DRM_PANEL_MAXIM_MAX96752F
 	  Say Y if you want to enable support for panels based on the
 	  Maxim MAX96752F.
 
+config DRM_ROCKCHIP_EDP_PANEL
+	bool "Rockchip Embedded DisplayPort Panel Support"
+	depends on DRM_ROCKCHIP
+	select BACKLIGHT
+
 config DRM_ROCKCHIP_PANEL
 	bool "Rockchip Panel Support"
 	depends on DRM_ROCKCHIP
 	select DRM_MIPI_DSI
+	select SOFT_SPI
 
 config DRM_ROHM_BU18XL82
 	bool "ROHM clockless serializer BU18TL82 and  deserializer BU18RL82"
@@ -110,6 +116,7 @@ config DRM_ROCKCHIP_INNO_VIDEO_PHY
 config DRM_ROCKCHIP_INNO_VIDEO_COMBO_PHY
 	tristate "Rockchip INNO MIPI/LVDS/TTL PHY driver"
 	depends on DRM_ROCKCHIP
+	select MIPI_DPHY_HELPERS
 	help
 	  Enable this to support the Rockchip MIPI/LVDS/TTL PHY
 	  with Innosilicon IP block.
@@ -127,6 +134,7 @@ config DRM_ROCKCHIP_DW_MIPI_DSI
 	depends on DRM_ROCKCHIP
 	select DRM_MIPI_DSI
 	select DRM_ROCKCHIP_PANEL
+	select MIPI_DPHY_HELPERS
 	help
 	 This selects support for Rockchip SoC specific extensions
 	 for the Synopsys DesignWare HDMI driver. If you want to
@@ -139,6 +147,7 @@ config DRM_ROCKCHIP_DW_MIPI_DSI2
 	select DRM_MIPI_DSI
 	select DRM_DSC
 	select DRM_ROCKCHIP_PANEL
+	select MIPI_DPHY_HELPERS
 	help
 	 This selects support for Rockchip SoC specific extensions
 	 for the Synopsys DesignWare MIPI DSI2 driver. If you want to
@@ -213,14 +222,6 @@ config DRM_ROCKCHIP_SAMSUNG_MIPI_DCPHY
 	help
 	  Enable this to support the Rockchip MIPI DCPHY
 	  with SAMSUNG IP block.
-
-config PHY_ROCKCHIP_SAMSUNG_HDPTX_HDMI
-	bool "Rockchip Samsung HDMI/DP Combo PHY HDMI driver"
-	depends on DRM_ROCKCHIP
-	select LIB_RATIONAL
-	help
-	  Support for Rockchip HDMI/DP Combo PHY HDMI with Samsung
-	  IP block.
 
 config DRM_ROCKCHIP_TVE
 	bool "Rockchip TVE Support"

@@ -29,7 +29,7 @@ struct memblock *param_parse_ddr_mem(int *out_count);
 /**
  * param_simple_parse_ddr_mem() - Simple parse ddr memory region
  */
-#ifndef CONFIG_BIDRAM
+#if !CONFIG_IS_ENABLED(BIDRAM)
 phys_size_t param_simple_parse_ddr_mem(int init_bank);
 #endif
 
@@ -69,10 +69,11 @@ int param_parse_atags_bootdev(char **devtype, char **devtnum);
  *
  * @devtype: out data to store dev type
  * @devnum: out data to store dev number
+ * @routing: out data to store routing number
  *
  * @return 0 on success, otherwise failed.
  */
-int param_parse_assign_bootdev(char **devtype, char **devtnum);
+int param_parse_assign_bootdev(char **devtype, char **devnum, char **routing);
 
 /**
  * param_parse_pre_serial() - Parse and Init serial according to pre-loader serial.

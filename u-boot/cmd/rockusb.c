@@ -15,6 +15,8 @@
 #include <usb.h>
 #include <usb_mass_storage.h>
 #include <rockusb.h>
+#include <asm/arch/mos.h>
+#include <asm/arch/rockchip_smccc.h>
 
 static struct rockusb rkusb;
 static struct rockusb *g_rkusb;
@@ -48,6 +50,7 @@ static int rkusb_write_sector(struct ums *ums_dev,
 	if (block_dev->if_type == IF_TYPE_MTD) {
 		mtd_blk = dev_get_uclass_platdata(block_dev->bdev);
 		mtd_blk->op_flag |= BLK_MTD_CONT_WRITE;
+		mtd_blk->op_flag |= BLK_MTD_LOADER_MODE;
 	}
 
 	ret = blk_dwrite(block_dev, blkstart, blkcnt, buf);
@@ -62,6 +65,7 @@ static int rkusb_write_sector(struct ums *ums_dev,
 #endif
 	if (block_dev->if_type == IF_TYPE_MTD) {
 		mtd_blk->op_flag &= ~(BLK_MTD_CONT_WRITE);
+		mtd_blk->op_flag &= ~(BLK_MTD_LOADER_MODE);
 	}
 	return ret;
 }
@@ -104,10 +108,9 @@ static void rkusb_fini(void)
 
 static int rkusb_init(const char *devtype, const char *devnums_part_str)
 {
-	char *s, *t, *devnum_part_str, *name;
+	char *s, *t, *devnum_part_str, *name, *part_str, *dev_str, *dup_str = NULL;
 	struct blk_desc *block_dev;
-	disk_partition_t info;
-	int partnum, cnt;
+	int dev, cnt;
 	int ret = -1;
 	struct ums *ums_new;
 
@@ -122,20 +125,21 @@ static int rkusb_init(const char *devtype, const char *devnums_part_str)
 		devnum_part_str = strsep(&t, ",");
 		if (!devnum_part_str)
 			break;
-#if defined(CONFIG_SCSI) && defined(CONFIG_CMD_SCSI) && (defined(CONFIG_UFS))
-		if (!strcmp(devtype, "scsi")) {
-			block_dev= blk_get_devnum_by_typename(devtype, 0);
-			if (block_dev == NULL)
-				return -ENXIO;
-		} else
-#endif
-		{
-			partnum = blk_get_device_part_str(devtype, devnum_part_str,
-						&block_dev, &info, 1);
-			if (partnum < 0)
-				goto cleanup;
+
+		part_str = strchr(devnum_part_str, ':');
+		if (part_str) {
+			dup_str = strdup(devnum_part_str);
+			dup_str[part_str - devnum_part_str] = 0;
+			dev_str = dup_str;
+		} else {
+			dev_str = devnum_part_str;
 		}
 
+		dev = blk_get_device_by_str(devtype, dev_str, &block_dev);
+		if (dev < 0)
+			goto cleanup;
+		if (dev_str == dup_str)
+			free(dup_str);
 		/* f_mass_storage.c assumes SECTOR_SIZE sectors */
 		if (block_dev->blksz != SECTOR_SIZE)
 			goto cleanup;
@@ -231,19 +235,16 @@ static int do_rkusb(cmd_tbl_t *cmdtp, int flag, int argc, char *const argv[])
 	if (!strcmp(devtype, "mmc") && !strcmp(devnum, "1")) {
 		pr_err("Forbid to flash mmc 1(sdcard)\n");
 		return CMD_RET_FAILURE;
-	} else if ((!strcmp(devtype, "nvme") || !strcmp(devtype, "scsi")) && !strcmp(devnum, "0")) {
-		/*
-		 * Add partnum ":0" to active 'allow_whole_dev' partition
-		 * search mechanism on multi storage, where there maybe not
-		 * valid partition table.
-		 */
-		devnum = "0:0";
 	}
 
 	g_rkusb = &rkusb;
 	rc = rkusb_init(devtype, devnum);
 	if (rc < 0)
 		return CMD_RET_FAILURE;
+
+#if defined(CONFIG_MOS_SUPPORT) && !defined(CONFIG_MOS_SECONDARY)
+	mos_set_boot_stage(MOS_BS_UBOOT_DOWNLOAD);
+#endif
 
 	if (g_rkusb->ums[0].block_dev.if_type == IF_TYPE_MTD &&
 	    g_rkusb->ums[0].block_dev.devnum == BLK_MTD_NAND) {

@@ -257,6 +257,12 @@ enum {
 #define RK805_IRQ_RTC_ALARM_MSK		BIT(5)
 #define RK805_IRQ_RTC_PERIOD_MSK	BIT(6)
 
+#define RK805B_VSELTABLE_REG		0x71
+#define RK805B_PMIC_SYS_CFG2		0xb1
+#define RK805B_VSELTABLE_4OR8		0x80
+#define RK805B_CHIP_VER_MSK		0x0F
+#define RK805B_CHIP_VER_NUM		0x04
+
 enum rk806_reg_id {
 	RK806_ID_DCDC1 = 0,
 	RK806_ID_DCDC2,
@@ -444,6 +450,7 @@ struct rk8xx_priv {
 	struct virq_chip *irq_chip;
 	struct spi_slave *slave;
 	int variant;
+	int vsel_table;
 	int irq;
 	int lp_off_time;
 	int lp_action;
@@ -452,6 +459,7 @@ struct rk8xx_priv {
 	int not_save_power_en;
 	int sys_can_sd;
 	int buck5_feedback_dis;
+	int pwron_on_time;
 	int pwr_ctr[3];
 	u32 *shutdown_sequence;
 	u32 *vb_shutdown_sequence;

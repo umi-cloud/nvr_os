@@ -78,15 +78,20 @@ static bool verify_permanent_attributes(
   uint8_t hash[AVB_SHA256_DIGEST_SIZE];
 #ifdef CONFIG_ROCKCHIP_PRELOADER_PUB_KEY
 #ifdef CONFIG_DM_CRYPTO
-  u32 cap = CRYPTO_MD5 | CRYPTO_SHA1 | CRYPTO_SHA256 | CRYPTO_RSA2048;
-  uint8_t rsa_hash[256] = {0};
-  uint8_t rsa_hash_revert[256] = {0};
-  unsigned int rsaResult_temp[8];
-  unsigned char rsaResult[32] = {0};
+  u32 cap = CRYPTO_MD5 | CRYPTO_SHA1 | CRYPTO_SHA256 |
+#ifdef CONFIG_FIT_ENABLE_RSA4096_SUPPORT
+      CRYPTO_RSA4096;
+#else
+      CRYPTO_RSA2048;
+#endif
+  uint8_t rsa_hash[32] = {0};
+  uint8_t rsa_sig[RK_AVB_PERM_ATTR_CER_SIZE] = {0};
+  uint8_t rsa_sig_revert[RK_AVB_PERM_ATTR_CER_SIZE] = {0};
+  u32 rsa_result_words[ROCKCHIP_RSA_PARAMETER_SIZE];
+  uint8_t *rsa_result_bytes = (uint8_t *)rsa_result_words;
   struct rk_pub_key pub_key;
   struct udevice *dev;
   rsa_key rsa_key;
-  char *temp;
   int ret = 0;
   int i;
 
@@ -95,14 +100,15 @@ static bool verify_permanent_attributes(
   if (ret)
     return false;
 
-  ret = rk_avb_get_perm_attr_cer(rsa_hash, 256);
+  /* note: actually this is a perm_attr rsa signature but not a certificate */
+  ret = rk_avb_get_perm_attr_cer(rsa_sig, RK_AVB_PERM_ATTR_CER_SIZE);
   if (ret) {
     avb_error("get_perm_attr_cer error\n");
     return false;
   }
 
-  for (i = 0; i < 256; i++)
-    rsa_hash_revert[255-i] = rsa_hash[i];
+  for (i = 0; i < RK_AVB_PERM_ATTR_CER_SIZE; i++)
+    rsa_sig_revert[RK_AVB_PERM_ATTR_CER_SIZE - 1 - i] = rsa_sig[i];
 
   dev = crypto_get_device(cap);
   if (!dev) {
@@ -111,24 +117,29 @@ static bool verify_permanent_attributes(
   }
 
   memset(&rsa_key, 0x00, sizeof(rsa_key));
+#ifdef CONFIG_FIT_ENABLE_RSA4096_SUPPORT
+  rsa_key.algo = CRYPTO_RSA4096;
+#else
   rsa_key.algo = CRYPTO_RSA2048;
+#endif
   rsa_key.n = (u32 *)&pub_key.rsa_n;
   rsa_key.e = (u32 *)&pub_key.rsa_e;
 #ifdef CONFIG_ROCKCHIP_CRYPTO_V1
   rsa_key.c = (u32 *)&pub_key.rsa_c;
 #endif
-  ret = crypto_rsa_verify(dev, &rsa_key, (u8 *)rsa_hash_revert, (u8 *)rsaResult_temp);
+  ret = crypto_rsa_verify(dev, &rsa_key,
+                          (u8 *)rsa_sig_revert,
+                          (u8 *)rsa_result_words);
   if (ret) {
     avb_error("Hardware verify error!\n");
     return false;
   }
 
-  temp = (char *)rsaResult_temp;
   for (i = 0; i < 32; i++)
-    rsaResult[31-i] = temp[i];
+    rsa_hash[31-i] = rsa_result_bytes[i];
 
   sha256((const uint8_t*)attributes, sizeof(AvbAtxPermanentAttributes), hash);
-  if (memcmp((void*)rsaResult, (void*)hash, 32) == 0)
+  if (memcmp((void*)rsa_hash, (void*)hash, 32) == 0)
     return true;
 
   return false;

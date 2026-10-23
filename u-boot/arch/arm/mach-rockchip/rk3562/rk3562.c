@@ -3,6 +3,7 @@
  *
  * SPDX-License-Identifier:     GPL-2.0+
  */
+#include <amp.h>
 #include <common.h>
 #include <clk.h>
 #include <dm.h>
@@ -505,9 +506,16 @@ void board_debug_uart_init(void)
 #endif
 }
 
-int fit_standalone_release(char *id, uintptr_t entry_point)
+int fit_standalone_ext_release(char *id, standalone_args_t *args)
 {
 	/* bus m0 configuration: */
+	uintptr_t load = args->load;
+	uintptr_t sram_start = args->sram_start;
+	uintptr_t exsram_start = args->exsram_start;
+	uintptr_t experi_start = args->experi_start;
+	uintptr_t uc_start = args->uc_start;
+	uintptr_t uc_end = args->uc_end;
+
 	/* open hclk_dcache / hclk_icache / clk_bus m0 rtc / fclk_bus_m0_core */
 	writel(0x03180000, TOP_CRU_BASE + TOP_CRU_GATE_CON23);
 
@@ -516,15 +524,31 @@ int fit_standalone_release(char *id, uintptr_t entry_point)
 
 	/*
 	 * mcu_cache_peripheral_addr
-	 * The uncache area ranges from 0x7c00000 to 0xffb400000
+	 * The uncache area ranges from uc_start to uc_end
 	 * and contains rpmsg shared memory
 	 */
-	writel(0x07c00000, SYS_GRF_BASE + SYS_GRF_SOC_CON5);
-	writel(0xffb40000, SYS_GRF_BASE + SYS_GRF_SOC_CON6);
-
+	if (uc_start && uc_end) {
+		writel(uc_start, SYS_GRF_BASE + SYS_GRF_SOC_CON5);
+		writel(uc_end, SYS_GRF_BASE + SYS_GRF_SOC_CON6);
+	}
 	sip_smc_mcu_config(ROCKCHIP_SIP_CONFIG_BUSMCU_0_ID,
 			   ROCKCHIP_SIP_CONFIG_MCU_CODE_START_ADDR,
-			   0xffff0000 | (entry_point >> 16));
+			   0xffff0000 | (load >> 16));
+	if (sram_start) {
+		sip_smc_mcu_config(ROCKCHIP_SIP_CONFIG_BUSMCU_0_ID,
+				   ROCKCHIP_SIP_CONFIG_MCU_SRAM_START_ADDR,
+				   0xffff0000 | (sram_start >> 16));
+	}
+	if (exsram_start) {
+		sip_smc_mcu_config(ROCKCHIP_SIP_CONFIG_BUSMCU_0_ID,
+				   ROCKCHIP_SIP_CONFIG_MCU_EXSRAM_START_ADDR,
+				   0xffff0000 | (exsram_start >> 16));
+	}
+	if (experi_start) {
+		sip_smc_mcu_config(ROCKCHIP_SIP_CONFIG_BUSMCU_0_ID,
+				   ROCKCHIP_SIP_CONFIG_MCU_EXPERI_START_ADDR,
+				   0xffff0000 | (experi_start >> 16));
+	}
 
 	/* release dcache / icache / bus m0 jtag / bus m0 */
 	writel(0x03280000, TOP_CRU_BASE + TOP_CRU_SOFTRST_CON23);

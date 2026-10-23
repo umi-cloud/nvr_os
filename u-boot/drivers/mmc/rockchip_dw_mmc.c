@@ -82,7 +82,11 @@ static uint rockchip_dwmmc_get_mmc_clk(struct dwmci_host *host, uint freq)
 	if (mmc_card_ddr52(host->mmc) && host->mmc->bus_width == 8)
 		freq *= 2;
 
+#if defined(CONFIG_ROCKCHIP_RV1126B)
+	ret = clk_set_rate(&priv->clk, freq * 2);
+#else
 	ret = clk_set_rate(&priv->clk, freq);
+#endif
 	if (ret < 0) {
 		debug("%s: err=%d\n", __func__, ret);
 		return 0;
@@ -447,7 +451,7 @@ internal_phase:
 	if (!(ret < 0)) {
 		if (priv->usrid == USRID_INTER_PHASE)
 			ret = rockchip_mmc_set_phase(host, true, plat->mmc.default_phase);
-		else if ((!priv->sample_clk.dev))
+		else if ((priv->sample_clk.dev))
 			ret = clk_set_phase(&priv->sample_clk, plat->mmc.default_phase);
 		if (ret < 0)
 			debug("MMC: can not set default phase!\n");

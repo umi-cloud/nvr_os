@@ -96,7 +96,12 @@ static int do_boot_fit(cmd_tbl_t *cmdtp, int flag, int argc, char *const argv[])
 
 #ifdef CONFIG_ANDROID_AB
 	char slot_suffix[3] = {0};
-	char slot_info[21] = "android_slotsuffix=";
+	/*
+	 * The correct slot_suffix args should be 'androidboot.slot_suffix='.
+	 * But considering of compability with old kernel and applications,
+	 * don't fix it for now.
+	 */
+	char slot_info[21] = "android_slotsufix=";
 
 	if (ab_get_slot_suffix(slot_suffix))
 		goto out;

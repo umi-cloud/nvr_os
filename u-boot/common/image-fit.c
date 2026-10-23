@@ -1261,7 +1261,7 @@ int fit_calculate_hash(const void *data, int data_len,
 }
 
 #ifndef USE_HOSTCC
-#if CONFIG_IS_ENABLED(FIT_HW_CRYPTO)
+#if !CONFIG_IS_ENABLED(ARMV8_CRYPTO) && CONFIG_IS_ENABLED(FIT_HW_CRYPTO)
 static int crypto_csum(u32 cap, const char *data, int len, u8 *output)
 {
 	struct udevice *dev;
@@ -1336,7 +1336,7 @@ int calculate_hash(const void *data, int data_len, const char *algo,
 #if defined(USE_HOSTCC)
 	return fit_calculate_hash(data, data_len, algo, value, value_len);
 #else
-#if !CONFIG_IS_ENABLED(FIT_HW_CRYPTO)
+#if CONFIG_IS_ENABLED(ARMV8_CRYPTO) || !CONFIG_IS_ENABLED(FIT_HW_CRYPTO)
 	return fit_calculate_hash(data, data_len, algo, value, value_len);
 #else
 	return hw_fit_calculate_hash(data, data_len, algo, value, value_len);
@@ -1484,21 +1484,31 @@ error:
  */
 int fit_image_verify(const void *fit, int image_noffset)
 {
+	const char *name = fit_get_name(fit, image_noffset, NULL);
 	const void	*data;
 	size_t		size;
-	int		noffset = 0;
 	char		*err_msg = "";
 
+	if (strchr(name, '@')) {
+		/*
+		 * We don't support this since libfdt considers names with the
+		 * name root but different @ suffix to be equal
+		 */
+		err_msg = "Node name contains @";
+		goto err;
+	}
 	/* Get image data and data length */
 	if (fit_image_get_data(fit, image_noffset, &data, &size)) {
 		err_msg = "Can't get image data/size";
-		printf("error!\n%s for '%s' hash node in '%s' image node\n",
-		       err_msg, fit_get_name(fit, noffset, NULL),
-		       fit_get_name(fit, image_noffset, NULL));
-		return 0;
+		goto err;
 	}
 
 	return fit_image_verify_with_data(fit, image_noffset, data, size);
+
+err:
+	printf("error!\n%s in '%s' image node\n", err_msg,
+	       fit_get_name(fit, image_noffset, NULL));
+	return 0;
 }
 
 /**
@@ -1750,18 +1760,81 @@ int fit_image_check_comp(const void *fit, int noffset, uint8_t comp)
 }
 
 /**
- * fit_check_format - sanity check FIT image format
- * @fit: pointer to the FIT format image header
+ * fdt_check_no_at() - Check for nodes whose names contain '@'
  *
- * fit_check_format() runs a basic sanity FIT image verification.
- * Routine checks for mandatory properties, nodes, etc.
+ * This checks the parent node and all subnodes recursively
  *
- * returns:
- *     1, on success
- *     0, on failure
+ * @fit: FIT to check
+ * @parent: Parent node to check
+ * @return 0 if OK, -EADDRNOTAVAIL is a node has a name containing '@'
  */
+static int fdt_check_no_at(const void *fit, int parent)
+{
+	const char *name;
+	int node;
+	int ret;
+
+	name = fdt_get_name(fit, parent, NULL);
+	if (!name || strchr(name, '@'))
+		return -EADDRNOTAVAIL;
+
+	fdt_for_each_subnode(node, fit, parent) {
+		ret = fdt_check_no_at(fit, node);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 int fit_check_format(const void *fit)
 {
+	ulong size = IMAGE_SIZE_INVAL;
+	int ret;
+
+	/* A FIT image must be a valid FDT */
+	ret = fdt_check_header(fit);
+	if (ret) {
+		debug("Wrong FIT format: not a flattened device tree (err=%d)\n", ret);
+		return 0;
+	}
+
+#ifndef USE_HOSTCC
+	if (CONFIG_IS_ENABLED(FIT_FULL_CHECK))
+#endif
+	{
+		/*
+		 * If we are not given the size, make do wtih calculating it.
+		 * This is not as secure, so we should consider a flag to
+		 * control this.
+		 */
+		if (size == IMAGE_SIZE_INVAL)
+			size = fdt_totalsize(fit);
+#ifndef USE_HOSTCC
+		ret = fdt_check_full(fit, size);
+		if (ret)
+			return 0;
+#endif
+		/*
+		 * U-Boot stopped using unit addressed in 2017. Since libfdt
+		 * can match nodes ignoring any unit address, signature
+		 * verification can see the wrong node if one is inserted with
+		 * the same name as a valid node but with a unit address
+		 * attached. Protect against this by disallowing unit addresses.
+		 */
+#ifndef USE_HOSTCC
+		if (CONFIG_IS_ENABLED(FIT_SIGNATURE))
+#endif
+		{
+			ret = fdt_check_no_at(fit, 0);
+
+			if (ret) {
+				debug("FIT check error %d\n", ret);
+				return 0;
+			}
+		}
+	}
+
 	/* mandatory / node 'description' property */
 	if (fdt_getprop(fit, 0, FIT_DESC_PROP, NULL) == NULL) {
 		debug("Wrong FIT format: no description\n");
@@ -2206,8 +2279,21 @@ int fit_image_load_index(bootm_headers_t *images, ulong addr,
 	printf("## Loading %s from FIT Image at %08lx ...\n", prop_name, addr);
 
 	bootstage_mark(bootstage_id + BOOTSTAGE_SUB_FORMAT);
-	if (!fit_check_format(fit)) {
+	ret = fit_check_format(fit);
+	if (!ret) {
 		printf("Bad FIT %s image format!\n", prop_name);
+#ifndef USE_HOSTCC
+		/*
+		 * Check if the failure is due to unit addresses in node names.
+		 * We need to check this separately since fit_check_format returns
+		 * boolean value for backward compatibility.
+		 */
+		if (CONFIG_IS_ENABLED(FIT_SIGNATURE) && CONFIG_IS_ENABLED(FIT_FULL_CHECK)) {
+			int check_ret = fdt_check_no_at(fit, 0);
+			if (check_ret == -EADDRNOTAVAIL)
+				printf("Signature checking prevents use of unit addresses (@) in nodes\n");
+		}
+#endif
 		bootstage_error(bootstage_id + BOOTSTAGE_SUB_FORMAT);
 		return -ENOEXEC;
 	}
@@ -2372,7 +2458,7 @@ int fit_image_load_index(bootm_headers_t *images, ulong addr,
 			printf(" Error: %d\n", ret);
 			return -EACCES;
 		}
-		buf = (void *)load;
+		memcpy((void *)buf, (void *)load, size);
 		printf(" OK\n");
 	}
 #endif

@@ -59,6 +59,17 @@ enum RK_CRYPTO_ALGO {
 	RK_ALGO_ALGO_MAX
 };
 
+enum RK_DICE_TYPE {
+	RK_DICE_UDS_PUB = 0,
+	RK_DICE_KM_ED25519_PUB,
+	RK_DICE_KM_ED25519_PRI,
+	RK_DICE_KM_CERTCHAIN,
+	RK_DICE_WV_ED25519_PUB,
+	RK_DICE_WV_ED25519_PRI,
+	RK_DICE_WV_CERTCHAIN,
+	RK_DICE_MAX
+};
+
 typedef struct {
 	uint32_t	algo;
 	uint32_t	mode;
@@ -83,6 +94,10 @@ typedef struct {
 #define ATTEST_CA_OUT_SIZE     256
 
 void optee_client_init(void);
+uint32_t trusty_set_dice_data(enum RK_DICE_TYPE type,
+			      uint8_t *data, uint32_t data_size);
+uint32_t trusty_get_dice_data(enum RK_DICE_TYPE type,
+			      uint8_t *data, uint32_t *data_size);
 uint32_t trusty_read_rollback_index(uint32_t slot, uint64_t *value);
 uint32_t trusty_write_rollback_index(uint32_t slot, uint64_t value);
 uint32_t trusty_read_permanent_attributes(uint8_t *attributes, uint32_t size);
@@ -125,6 +140,10 @@ uint32_t trusty_write_oem_hdcp_key(enum RK_HDCP_KEYID key_id,
 				  uint8_t *byte_buf, uint32_t byte_len);
 uint32_t trusty_oem_hdcp_key_is_written(enum RK_HDCP_KEYID key_id, uint8_t *value);
 uint32_t trusty_set_oem_hdcp_key_mask(enum RK_HDCP_KEYID key_id);
+#if defined(CONFIG_MOS_SUPPORT) && defined(CONFIG_MOS_SECONDARY)
+uint32_t trusty_write_otp_rollback(uint32_t value);
+uint32_t trusty_read_otp_rollback(uint32_t *value);
+#endif
 uint32_t trusty_attest_dh(uint8_t *dh, uint32_t *dh_size);
 uint32_t trusty_attest_uuid(uint8_t *uuid, uint32_t *uuid_size);
 uint32_t trusty_attest_get_ca
@@ -138,6 +157,6 @@ uint32_t trusty_write_fw_encrypt_key(enum RK_FW_KEYID key_id,
 uint32_t trusty_fw_key_cipher(enum RK_FW_KEYID key_id, rk_cipher_config *config,
 			      uint32_t src_phys_addr, uint32_t dst_phys_addr,
 			      uint32_t len);
-uint32_t trusty_verify_config_ip(char *licence_str);
+uint32_t trusty_verify_config_ip(char *licence_str, char *IP_str);
 
 #endif

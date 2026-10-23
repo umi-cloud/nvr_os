@@ -453,6 +453,12 @@ int env_update_filter(const char *varname, const char *varvalue,
 		a_item = strtok(NULL, " ");
 	}
 
+	/* Warn if we hit the limit for a_items */
+	if (a_item && i >= ARGS_ITEM_NUM) {
+		printf("WARNING: %s has more than %d parameters, some may be lost!\n",
+		       varname, ARGS_ITEM_NUM);
+	}
+
 	/*
 	 * Splite varvalue into items containing "=" by the space.
 	 * parse varvalue title, eg: "bootmode=emmc", title is "bootmode"
@@ -477,6 +483,12 @@ int env_update_filter(const char *varname, const char *varvalue,
 		}
 
 		v_item = strtok(NULL, " ");
+	}
+
+	/* Warn if we hit the limit for v_items */
+	if (v_item && j >= ARGS_ITEM_NUM) {
+		printf("WARNING: varvalue has more than %d parameters, some may be lost!\n",
+		       ARGS_ITEM_NUM);
 	}
 
 	/* For every v_item, search its title */
@@ -603,6 +615,14 @@ char *env_exist(const char *varname, const char *varvalue)
 
 	oldvalue = env_get(varname);
 	if (oldvalue) {
+		/* Match complete one ? */
+		if (!strcmp(oldvalue, varvalue)) {
+			debug("%s: '%s' is already exist in '%s'(complete)\n",
+			      __func__, varvalue, varname);
+			ptr = oldvalue;
+			goto out;
+		}
+
 		/* Match middle one ? */
 		snprintf(buf, len, " %s ", varvalue);
 		p = strstr(oldvalue, buf);

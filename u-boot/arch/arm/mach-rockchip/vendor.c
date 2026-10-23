@@ -12,6 +12,7 @@
 #include <part.h>
 #include <fdt_support.h>
 #include <usbplug.h>
+#include <asm/arch/mos.h>
 
 /* tag for vendor check */
 #define VENDOR_TAG		0x524B5644
@@ -138,6 +139,16 @@ static const char *vendor_mtd_name = "vnvm";
 #endif
 
 /* vendor private read write ops*/
+#ifdef CONFIG_SPL_BUILD
+/* spl_load_info type interface (read-only) */
+static struct spl_load_info *_spl_load_info;
+
+int flash_vendor_dev_ops_register(struct spl_load_info *info)
+{
+	_spl_load_info = info;
+	return 0;
+}
+#else
 static	int (*_flash_read)(struct blk_desc *dev_desc,
 			   u32 sec,
 			   u32 n_sec,
@@ -164,6 +175,7 @@ int flash_vendor_dev_ops_register(int (*read)(struct blk_desc *dev_desc,
 
 	return -EPERM;
 }
+#endif
 
 #ifdef CONFIG_MTD_BLK
 static int mtd_vendor_storage_init(struct blk_desc *dev_desc)
@@ -317,7 +329,11 @@ static int vendor_ops(u8 *buffer, u32 addr, u32 n_sec, int write)
 	unsigned int lba = 0;
 	int ret = 0;
 
+#ifdef CONFIG_SPL_BUILD
+	dev_desc = _spl_load_info->dev;
+#else
 	dev_desc = rockchip_get_bootdev();
+#endif
 	if (!dev_desc) {
 		printf("%s: dev_desc is NULL!\n", __func__);
 		return -ENODEV;
@@ -392,15 +408,40 @@ static int vendor_ops(u8 *buffer, u32 addr, u32 n_sec, int write)
 		return -ENODEV;
 	}
 	if (write) {
+#ifdef CONFIG_SPL_BUILD
+		/* spl_load_info does not support write */
+		printf("[Vendor ERROR]: spl_load_info doesn't support write!\n");
+		return -ENOTSUPP;
+#else
 		if (_flash_write)
 			ret = _flash_write(dev_desc, lba + addr, n_sec, buffer);
 		else
 			ret = blk_dwrite(dev_desc, lba + addr, n_sec, buffer);
+#endif
 	} else {
+#ifdef CONFIG_SPL_BUILD
+		/* use spl_load_info read interface */
+		if (_spl_load_info) {
+			ulong cnt;
+
+			cnt = _spl_load_info->read(_spl_load_info,
+						   lba + addr,
+						   n_sec,
+						   buffer);
+			/* spl_load_info read returns ulong, need to check */
+			if (cnt != n_sec)
+				ret = -EIO;
+			else
+				ret = n_sec; /* success */
+		} else {
+			ret = blk_dread(dev_desc, lba + addr, n_sec, buffer);
+		}
+#else
 		if (_flash_read)
 			ret = _flash_read(dev_desc, lba + addr, n_sec, buffer);
 		else
 			ret = blk_dread(dev_desc, lba + addr, n_sec, buffer);
+#endif
 	}
 
 	debug("[Vendor INFO]:op=%s, ret=%d\n", write ? "write" : "read", ret);
@@ -435,7 +476,11 @@ int vendor_storage_init(void)
 	u16 version2_offset, part_size;
 	struct blk_desc *dev_desc;
 
+#ifdef CONFIG_SPL_BUILD
+	dev_desc = _spl_load_info->dev;
+#else
 	dev_desc = rockchip_get_bootdev();
+#endif
 	if (!dev_desc) {
 		printf("[Vendor ERROR]:Invalid boot device type(%d)\n",
 		       bootdev_type);
@@ -574,6 +619,24 @@ out:
 	return ret;
 }
 
+#ifdef CONFIG_SPL_BUILD
+void vendor_storage_fixup(void *buf)
+{
+	unsigned long size;
+	unsigned long start;
+
+	/* init vendor storage */
+	if (!bootdev_type) {
+		if (vendor_storage_init() < 0)
+			return;
+	}
+
+	start = (unsigned long)vendor_info.hdr;
+	size = (unsigned long)((void *)vendor_info.version2 - (void *)vendor_info.hdr);
+	size += 4;
+	memcpy(buf, (void *)start, size);
+}
+#else
 void vendor_storage_fixup(void *blob)
 {
 	unsigned long size;
@@ -596,6 +659,7 @@ void vendor_storage_fixup(void *blob)
 					   (u64)size);
 	}
 }
+#endif
 
 /*
  * @id: item id, first 4 id is occupied:
@@ -631,6 +695,80 @@ int vendor_storage_read(u16 id, void *pbuf, u16 size)
 				size = (item + i)->size;
 			offset = (item + i)->offset;
 			memcpy(pbuf, (vendor_info.data + offset), size);
+			return size;
+		}
+	}
+	debug("[Vendor ERROR]:No matching item, id=%d\n", id);
+
+	return -EINVAL;
+}
+
+static int vendor_storage_parse_buffer(void *vendor_addr, u32 vendor_size,
+				       struct vendor_info *info)
+{
+	u8 *buffer = vendor_addr;
+	u32 data_offset;
+	u32 total_size;
+	u32 *version2;
+
+	if (!buffer || !info)
+		return -EINVAL;
+
+	info->hdr = (struct vendor_hdr *)buffer;
+	info->item = (struct vendor_item *)(buffer + sizeof(struct vendor_hdr));
+
+	data_offset = EMMC_VENDOR_DATA_OFFSET;
+	total_size = data_offset + info->hdr->free_offset + info->hdr->free_size + 8;
+	if (total_size == EMMC_VENDOR_INFO_SIZE ||
+	    total_size == NAND_VENDOR_INFO_SIZE) {
+		info->data = buffer + data_offset;
+		version2 = (u32 *)(buffer + total_size - 4);
+	} else {
+		data_offset = FLASH_VENDOR_DATA_OFFSET;
+		total_size = data_offset + info->hdr->free_offset +
+			     info->hdr->free_size + 8;
+		if (total_size != FLASH_VENDOR_INFO_SIZE)
+			return -EINVAL;
+
+		info->data = buffer + data_offset;
+		version2 = (u32 *)(buffer + total_size - 4);
+	}
+
+	if (vendor_size < total_size)
+		return -EINVAL;
+
+	info->version2 = version2;
+
+	if (info->hdr->tag != VENDOR_TAG ||
+	    info->hdr->version != *info->version2)
+		return -EINVAL;
+
+	return 0;
+}
+
+/* read vendor storage from a given vendor storage buffer */
+int vendor_storage_buffer_read(u16 id, void *pbuf, u16 size,
+			       void *vendor_addr, u32 vendor_size)
+{
+	u32 i;
+	u16 offset;
+	struct vendor_item *item;
+	struct vendor_info vendor_buf;
+	int ret;
+
+	ret = vendor_storage_parse_buffer(vendor_addr, vendor_size, &vendor_buf);
+	if (ret)
+		return ret;
+
+	item = vendor_buf.item;
+	for (i = 0; i < vendor_buf.hdr->item_num; i++) {
+		if ((item + i)->id == id) {
+			debug("[Vendor INFO]:Find the matching item, id=%d\n", id);
+			/* Correct the size value */
+			if (size > (item + i)->size)
+				size = (item + i)->size;
+			offset = (item + i)->offset;
+			memcpy(pbuf, vendor_buf.data + offset, size);
 			return size;
 		}
 	}

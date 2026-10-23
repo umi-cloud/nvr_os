@@ -7336,7 +7336,7 @@ _u_boot_list_2_driver_2_rockchip_secure_otp:
 .LASF321:
 	.string	"__dtb_dt_begin"
 .LASF253:
-	.string	"UCLASS_EINK_DISPLAY"
+	.string	"UCLASS_EBOOK_DISPLAY"
 .LASF311:
 	.string	"sys_start_tick"
 .LASF169:

@@ -62,7 +62,7 @@ static bool spl_ab_data_verify_and_byteswap(const AvbABData *src,
 {
 	/* Ensure magic is correct. */
 	if (safe_memcmp(src->magic, AVB_AB_MAGIC, AVB_AB_MAGIC_LEN) != 0) {
-		printf("Magic is incorrect.\n");
+		printf("A/B Magic is incorrect.\n");
 		return false;
 	}
 
@@ -254,7 +254,9 @@ int spl_get_current_slot(struct blk_desc *dev_desc, char *partition, char *slot)
 			memcpy(slot, "_b", 2);
 			goto out;
 		} else {
-			return -ENODEV;
+			printf("SPL: No valid last_boot. Boot from slot-A by default.\n");
+			memcpy(slot, "_a", 2);
+			goto out;
 		}
 	}
 
@@ -265,10 +267,15 @@ int spl_get_current_slot(struct blk_desc *dev_desc, char *partition, char *slot)
 
 	if (last_slot_index != slot_index_to_boot) {
 		last_slot_index = slot_index_to_boot;
-		printf("SPL: A/B-slot: %s, successful: %d, tries-remain: %d\n",
+		printf("SPL: A/B-slot: %s, successful: %d, tries-remain: %d (select)\n",
 		       slot,
 		       ab_data.slots[slot_index_to_boot].successful_boot,
 		       ab_data.slots[slot_index_to_boot].tries_remaining);
+
+		printf("SPL: A/B-slot: %s, successful: %d, tries-remain: %d\n",
+		       (!slot_index_to_boot) == 0 ? "_a" : "_b",
+		       ab_data.slots[!slot_index_to_boot].successful_boot,
+		       ab_data.slots[!slot_index_to_boot].tries_remaining);
 	}
 
 out:

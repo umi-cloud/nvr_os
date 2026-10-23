@@ -9,6 +9,9 @@
 
 #include "core.h"
 
+static LIST_HEAD(serdes_route_list);
+static const struct udevice_id *serdes_match;
+
 static int dm_i2c_reg_write_u8(struct udevice *dev, u8 reg, u8 val)
 {
 	int ret;
@@ -86,18 +89,22 @@ static int dm_i2c_reg_clrset_u8(struct udevice *dev,
 int serdes_reg_read(struct serdes *serdes,
 		    unsigned int reg, unsigned int *val)
 {
-	unsigned int value;
+	int ret;
 
 	if (serdes->chip_data->reg_val_type == REG_8BIT_VAL_8IT)
-		value = dm_i2c_reg_read_u8(serdes->dev, reg);
+		ret = dm_i2c_reg_read_u8(serdes->dev, reg);
 	else
-		value = dm_i2c_reg_read(serdes->dev, reg);
+		ret = dm_i2c_reg_read(serdes->dev, reg);
 
-	*val = value;
-	SERDES_DBG_I2C("%s %s %s Read Reg%04x %04x\n",
-		       __func__, serdes->dev->name,
-		       serdes->dev->name, reg, *val);
-	return 0;
+	if (ret >= 0) {
+		*val = ret;
+		ret = 0;
+	}
+
+	SERDES_DBG_I2C("%s %s Read Reg%04x %04x, ret=%d\n",
+		       __func__, serdes->dev->name, reg, *val, ret);
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(serdes_reg_read);
 
@@ -113,18 +120,14 @@ int serdes_reg_write(struct serdes *serdes, unsigned int reg,
 {
 	int ret = 0;
 
-	SERDES_DBG_I2C("%s %s Write Reg%04x %04x) type=%d\n",
-		       __func__, serdes->dev->name,
-		       reg, val, serdes->chip_data->reg_val_type);
-	if (serdes->chip_data->reg_val_type == REG_8BIT_VAL_8IT) {
+	if (serdes->chip_data->reg_val_type == REG_8BIT_VAL_8IT)
 		ret = dm_i2c_reg_write_u8(serdes->dev, reg, val);
-		if (ret != 0)
-			return ret;
-	} else {
+	else
 		ret = dm_i2c_reg_write(serdes->dev, reg, val);
-		if (ret != 0)
-			return ret;
-	}
+
+	SERDES_DBG_I2C("%s %s Write Reg%04x %04x type=%d, ret=%d\n",
+		       __func__, serdes->dev->name,
+		       reg, val, serdes->chip_data->reg_val_type, ret);
 
 	return ret;
 }
@@ -170,15 +173,13 @@ int serdes_set_bits(struct serdes *serdes, unsigned int reg,
 {
 	int ret = 0;
 
-	SERDES_DBG_I2C("%s %s %s Write Reg%04x %04x) mask=%04x\n",
-		       __func__,
-		       serdes->dev->name,
-		       serdes->dev->name, reg, val, mask);
-
 	if (serdes->chip_data->reg_val_type == REG_8BIT_VAL_8IT)
 		ret = dm_i2c_reg_clrset_u8(serdes->dev, reg, mask, val);
 	else
 		ret = dm_i2c_reg_clrset(serdes->dev, reg, mask, val);
+
+	SERDES_DBG_I2C("%s %s Write Reg%04x %04x mask=%04x, ret=%d\n",
+		       __func__, serdes->dev->name, reg, val, mask, ret);
 
 	return ret;
 }
@@ -194,6 +195,9 @@ int serdes_i2c_set_sequence(struct serdes *serdes)
 		       serdes->dev->name);
 		return 0;
 	}
+
+	if (!serdes->serdes_init_seq)
+		return 0;
 
 	for (i = 0; i < serdes->serdes_init_seq->reg_seq_cnt; i++) {
 		if (serdes->serdes_init_seq->reg_sequence[i].reg == 0xffff) {
@@ -224,13 +228,6 @@ int serdes_i2c_set_sequence(struct serdes *serdes)
 					       serdes->serdes_init_seq->reg_sequence[i].reg,
 					       serdes->serdes_init_seq->reg_sequence[i].def);
 		}
-	}
-
-	/* workaround */
-	if (serdes->chip_data->serdes_id == MAXIM_ID_MAX96752) {
-		ret = serdes_reg_write(serdes, 0x10, 0x21);
-		mdelay(10);
-		printf("%s reset oneshot max96752\n", serdes->dev->name);
 	}
 
 	SERDES_DBG_MFD("serdes %s sequence_init\n", serdes->dev->name);
@@ -289,8 +286,9 @@ int serdes_get_init_seq(struct serdes *serdes)
 
 	data = dev_read_prop(serdes->dev, "serdes-init-sequence", &len);
 	if (!data) {
-		printf("failed to get serdes-init-sequence\n");
-		return -EINVAL;
+		printf("serdes %s failed to get serdes-init-sequence\n",
+		       serdes->dev->name);
+		return 0;
 	}
 
 	serdes->serdes_init_seq = calloc(1, sizeof(*serdes->serdes_init_seq));
@@ -447,6 +445,452 @@ int serdes_pinctrl_register(struct udevice *dev)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(serdes_pinctrl_register);
+
+static const struct device_node *
+serdes_graph_get_remote_port(ofnode node, const char *prop_name)
+{
+	u32 phandle;
+	ofnode ep_node, port;
+
+	if (ofnode_read_u32(node, prop_name, &phandle))
+		return NULL;
+
+	ep_node = ofnode_get_by_phandle(phandle);
+	if (!ofnode_valid(ep_node) || !ofnode_is_available(ep_node))
+		return NULL;
+
+	port = ofnode_get_parent(ep_node);
+	if (!ofnode_valid(port))
+		return NULL;
+
+	return ofnode_to_np(port);
+}
+
+static const struct device_node *serdes_of_graph_get_port_parent(ofnode port)
+{
+	ofnode parent;
+	int is_ports_node;
+
+	parent = ofnode_get_parent(port);
+	is_ports_node = strstr(ofnode_to_np(parent)->full_name,
+			       "ports") ? 1 : 0;
+	if (is_ports_node)
+		parent = ofnode_get_parent(parent);
+
+	return ofnode_to_np(parent);
+}
+
+static const struct device_node *
+serdes_of_graph_get_remote_node(ofnode node, int port, int endpoint)
+{
+	const struct device_node *ep_node;
+	ofnode ep;
+	uint phandle;
+
+	ep_node = rockchip_of_graph_get_endpoint_by_regs(node, port, endpoint);
+	if (!ep_node)
+		return NULL;
+
+	if (ofnode_read_u32(np_to_ofnode(ep_node), "remote-endpoint", &phandle))
+		return NULL;
+
+	ep = ofnode_get_by_phandle(phandle);
+	if (!ofnode_valid(ep))
+		return NULL;
+
+	return ofnode_to_np(ep);
+}
+
+static const struct device_node *
+serdes_graph_get_remote_device(ofnode node, int port, int endpoint)
+{
+	ofnode ports;
+	const struct device_node *ep_node;
+
+	ep_node = serdes_of_graph_get_remote_node(node, port, endpoint);
+	if (!ep_node)
+		return NULL;
+
+	ports = ofnode_get_parent(np_to_ofnode(ep_node));
+	if (!ofnode_valid(ports))
+		return NULL;
+
+	return serdes_of_graph_get_port_parent(ports);
+}
+
+static int serdes_of_find_panel(struct udevice *dev, int port,
+				int endpoint, struct rockchip_panel **panel)
+{
+	const struct device_node *panel_node;
+	ofnode panel_ofnode;
+	struct udevice *panel_dev;
+	int ret = 0;
+
+	*panel = NULL;
+	panel_ofnode = dev_read_subnode(dev, "panel");
+	if (ofnode_valid(panel_ofnode) && ofnode_is_available(panel_ofnode)) {
+		ret = uclass_get_device_by_ofnode(UCLASS_PANEL, panel_ofnode,
+						  &panel_dev);
+		if (!ret)
+			goto found;
+	}
+
+	panel_node = serdes_graph_get_remote_device(dev_ofnode(dev), port, endpoint);
+	if (!panel_node)
+		return -ENODEV;
+
+	ret = uclass_get_device_by_ofnode(UCLASS_PANEL,
+					  np_to_ofnode(panel_node), &panel_dev);
+	if (!ret)
+		goto found;
+
+	return -ENODEV;
+
+found:
+	*panel = (struct rockchip_panel *)dev_get_driver_data(panel_dev);
+	return 0;
+}
+
+static int serdes_of_find_bridge(struct udevice *dev, int port,
+				 int endpoint, struct rockchip_bridge **bridge)
+{
+	const struct device_node *bridge_node;
+	struct udevice *bridge_dev;
+	int ret = 0;
+
+	bridge_node = serdes_graph_get_remote_device(dev_ofnode(dev), port, endpoint);
+	if (!bridge_node)
+		return -ENODEV;
+
+	ret = uclass_get_device_by_ofnode(UCLASS_VIDEO_BRIDGE,
+					  np_to_ofnode(bridge_node),
+					  &bridge_dev);
+	if (!ret)
+		goto found;
+
+	return -ENODEV;
+
+found:
+	*bridge = (struct rockchip_bridge *)dev_get_driver_data(bridge_dev);
+	return 0;
+}
+
+static int
+serdes_find_bridge_or_panel(struct udevice *dev, int port, int endpoint,
+			    struct rockchip_panel **panel,
+			    struct rockchip_bridge **bridge)
+{
+	int ret = 0;
+
+	if (*panel)
+		return 0;
+
+	*panel = NULL;
+	*bridge = NULL;
+
+	if (panel) {
+		ret  = serdes_of_find_panel(dev, port, endpoint, panel);
+		if (!ret)
+			goto exit;
+	}
+
+	if (!ret)
+		goto exit;
+
+	ret = serdes_of_find_bridge(dev, port, endpoint, bridge);
+	if (!ret)
+		ret = serdes_find_bridge_or_panel((*bridge)->dev,
+						  1, 0, panel,
+						  &(*bridge)->next_bridge);
+
+exit:
+	return ret;
+}
+
+void serdes_get_split_bridge_or_panel(struct serdes_bridge *serdes_bridge)
+{
+	int ret;
+	u8 nr = 0;
+	ofnode ports, port;
+	struct rockchip_bridge *bridge = serdes_bridge->bridge;
+	struct udevice *dev = bridge->dev;
+
+	ports = ofnode_find_subnode(dev->node, "ports");
+	if (!ofnode_valid(ports))
+		return;
+
+	ofnode_for_each_subnode(port, ports) {
+		if (!ofnode_is_available(port) ||
+		    !of_find_property(ofnode_to_np(port), "reg", NULL))
+			continue;
+
+		nr++;
+	}
+
+	if (nr == 3)
+		serdes_bridge->split_mode = true;
+
+	if (!serdes_bridge->split_mode)
+		return;
+
+	ret = serdes_find_bridge_or_panel(dev, 2, 0,
+					  &serdes_bridge->panel_split,
+					  &serdes_bridge->bridge_split);
+	if (ret)
+		debug("Warn: no find serdes %s panel or bridge split\n",
+		      dev->name);
+}
+EXPORT_SYMBOL_GPL(serdes_get_split_bridge_or_panel);
+
+int serdes_set_i2c_address(struct serdes *serdes,
+			   u32 reg_use, int link)
+{
+	int ret = 0;
+	struct serdes_chip_data *chip_data;
+	struct serdes *serdes_split = serdes->g_serdes_bridge_split;
+
+	if (!serdes_split) {
+		pr_info("%s: serdes_split is null\n", __func__);
+		return -1;
+	}
+
+	chip_data = serdes_split->chip_data;
+	if (!chip_data)
+		return -1;
+
+	if (chip_data->split_ops && chip_data->split_ops->select)
+		ret = chip_data->split_ops->select(serdes_split, link);
+
+	if (serdes->chip_data && serdes->chip_data->split_ops &&
+	    serdes->chip_data->split_ops->set_i2c_addr)
+		ret = serdes->chip_data->split_ops->set_i2c_addr(serdes,
+							   reg_use, link);
+
+	if (chip_data->split_ops && chip_data->split_ops->select)
+		ret = chip_data->split_ops->select(serdes_split,
+						   SER_SPLITTER_MODE);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(serdes_set_i2c_address);
+
+static bool serdes_node_match(ofnode node)
+{
+	ofnode parent;
+	const struct udevice_id *id;
+	const struct udevice_id *match = serdes_match;
+
+	if (!ofnode_valid(node) || !match)
+		return false;
+
+	parent = ofnode_get_parent(node);
+	if (!ofnode_valid(parent))
+		return false;
+
+	for (id = match; id->compatible; id++) {
+		if (of_device_is_compatible(ofnode_to_np(parent),
+					    id->compatible, NULL, NULL))
+			return true;
+	}
+
+	return false;
+}
+
+static int serdes_node_add(ofnode prev_node, ofnode node, u32 fbd_mode)
+{
+	struct serdes_route_entry *entry;
+
+	entry = calloc(1, sizeof(*entry));
+	if (!entry)
+		return -ENOMEM;
+
+	entry->prev_node = prev_node;
+	entry->node = node;
+	entry->fbd_mode = fbd_mode;
+
+	list_add_tail(&entry->list, &serdes_route_list);
+	SERDES_DBG_MFD("%s: prev_node=%s node=%s fbd=%d\n",
+		       __func__, ofnode_get_name(prev_node),
+		       ofnode_get_name(node), fbd_mode);
+
+	return 0;
+}
+
+static bool serdes_check_route(const struct device_node *np, int depth)
+{
+	u32 reg;
+	ofnode node;
+	ofnode ports, port;
+	bool result = false;
+
+	if (!np)
+		return false;
+
+	node = np_to_ofnode(np);
+	if (!ofnode_valid(node) || depth <= 0)
+		return false;
+
+	if (serdes_node_match(node))
+		return true;
+
+	ports = ofnode_find_subnode(node, "ports");
+	if (!ofnode_valid(ports))
+		return false;
+
+	ofnode_for_each_subnode(port, ports) {
+		const struct device_node *next_node;
+
+		if (ofnode_read_u32(port, "reg", &reg))
+			continue;
+		if (reg == 0)
+			continue;
+
+		next_node = serdes_graph_get_remote_device(node, reg, 0);
+		if (!next_node)
+			continue;
+
+		if (serdes_check_route(next_node, depth - 1)) {
+			result = true;
+			break;
+		}
+	}
+
+	return result;
+}
+
+static void serdes_route_attach(ofnode prev_node, ofnode node,
+				u32 fbd_mode, int depth)
+{
+	u32 reg;
+	ofnode ports, port;
+
+	if (!ofnode_valid(node) || depth <= 0)
+		return;
+
+	if (serdes_node_add(prev_node, node, fbd_mode)) {
+		printf("serdes node %s add fail\n", ofnode_get_name(node));
+		return;
+	}
+
+	ports = ofnode_find_subnode(node, "ports");
+	if (!ofnode_valid(ports))
+		return;
+
+	ofnode_for_each_subnode(port, ports) {
+		const struct device_node *next_node;
+
+		if (ofnode_read_u32(port, "reg", &reg))
+			continue;
+		if (reg == 0)
+			continue;
+
+		next_node = serdes_graph_get_remote_device(node, reg, 0);
+		if (!next_node)
+			continue;
+
+		serdes_route_attach(node, np_to_ofnode(next_node),
+				    fbd_mode, depth - 1);
+	}
+}
+
+int serdes_route_bind(const struct udevice_id *match)
+{
+	u32 fbd_mode;
+	int phandle;
+	bool is_ports_node = false;
+	ofnode node, route_node;
+	const struct device_node *conn, *conn_port, *bridge_first;
+	const struct device_node *port_node, *ep_node, *port_parent_node;
+	static bool is_bind;
+
+	if (is_bind)
+		return 0;
+
+	route_node = ofnode_path("/display-subsystem/route");
+	if (!ofnode_valid(route_node))
+		return 0;
+
+	serdes_match = match;
+	ofnode_for_each_subnode(node, route_node) {
+		if (!ofnode_is_available(node))
+			continue;
+		phandle = ofnode_read_u32_default(node, "connect", -1);
+		if (phandle < 0) {
+			printf("Warn: can't find connect node's handle\n");
+			continue;
+		}
+
+		ep_node = of_find_node_by_phandle(phandle);
+		if (!ofnode_valid(np_to_ofnode(ep_node))) {
+			printf("Warn: can't find endpoint node from phandle\n");
+			continue;
+		}
+
+		port_node = of_get_parent(ep_node);
+		if (!ofnode_valid(np_to_ofnode(port_node))) {
+			printf("Warn: can't find port node from ep\n");
+			continue;
+		}
+
+		port_parent_node = of_get_parent(port_node);
+		if (!ofnode_valid(np_to_ofnode(port_parent_node))) {
+			printf("Warn: can't find port parent node from port\n");
+			continue;
+		}
+
+		is_ports_node = strstr(port_parent_node->full_name, "ports") ? 1 : 0;
+		if (is_ports_node) {
+			fbd_mode = ofnode_read_u32_default(np_to_ofnode(port_node),
+							   "rockchip,drm-fbd-mode", 0);
+
+			conn_port = serdes_graph_get_remote_port(np_to_ofnode(ep_node),
+								 "remote-endpoint");
+			if (!ofnode_valid(np_to_ofnode(conn_port)))
+				continue;
+
+			conn = serdes_of_graph_get_port_parent(np_to_ofnode(conn_port));
+			if (!ofnode_valid(np_to_ofnode(conn)) ||
+			    !ofnode_is_available(np_to_ofnode(conn)))
+				continue;
+
+			bridge_first = serdes_graph_get_remote_device(np_to_ofnode(conn), 1, 0);
+			if (!bridge_first) {
+				bridge_first =
+					serdes_graph_get_remote_device(np_to_ofnode(conn), 2, 0);
+				if (!bridge_first)
+					continue;
+			}
+
+			if (!serdes_check_route(bridge_first, SERDES_CHECK_DEPTH))
+				continue;
+
+			serdes_route_attach(np_to_ofnode(conn), np_to_ofnode(bridge_first),
+					    fbd_mode, SERDES_ATTACH_DEPTH);
+		}
+	}
+
+	is_bind = true;
+	return 0;
+}
+
+int serdes_get_route_mode(ofnode node, u32 *mode)
+{
+	struct serdes_route_entry *entry;
+	ofnode parent;
+
+	if (!ofnode_valid(node))
+		return -EINVAL;
+
+	list_for_each_entry(entry, &serdes_route_list, list) {
+		parent = ofnode_get_parent(entry->node);
+		if (ofnode_equal(parent, node)) {
+			*mode = entry->fbd_mode;
+			return 0;
+		}
+	}
+
+	return -EINVAL;
+}
 
 static int serdes_i2c_init(struct serdes *serdes)
 {

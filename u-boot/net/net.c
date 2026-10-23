@@ -870,12 +870,23 @@ static struct ip_udp_hdr *__net_defragment(struct ip_udp_hdr *ip, int *lenp)
 	int offset8, start, len, done = 0;
 	u16 ip_off = ntohs(ip->ip_off);
 
+	/*
+	 * Calling code already rejected <, but we don't have to deal
+	 * with an IP fragment with no payload.
+	 */
+	if (ntohs(ip->ip_len) <= IP_HDR_SIZE)
+		return NULL;
+
 	/* payload starts after IP header, this fragment is in there */
 	payload = (struct hole *)(pkt_buff + IP_HDR_SIZE);
 	offset8 =  (ip_off & IP_OFFS);
 	thisfrag = payload + offset8;
 	start = offset8 * 8;
 	len = ntohs(ip->ip_len) - IP_HDR_SIZE;
+
+	/* All but last fragment must have a multiple-of-8 payload. */
+	if ((len & 7) && (ip_off & IP_FLAGS_MFRAG))
+		return NULL;
 
 	if (start + len > IP_MAXUDP) /* fragment extends too far */
 		return NULL;
@@ -1148,9 +1159,9 @@ void net_process_received_packet(uchar *in_packet, int len)
 	case PROT_IP:
 		debug_cond(DEBUG_NET_PKT, "Got IP\n");
 		/* Before we start poking the header, make sure it is there */
-		if (len < IP_UDP_HDR_SIZE) {
+		if (len < IP_HDR_SIZE) {
 			debug("len bad %d < %lu\n", len,
-			      (ulong)IP_UDP_HDR_SIZE);
+			      (ulong)IP_HDR_SIZE);
 			return;
 		}
 		/* Check the packet length */
@@ -1159,6 +1170,10 @@ void net_process_received_packet(uchar *in_packet, int len)
 			return;
 		}
 		len = ntohs(ip->ip_len);
+		if (len < IP_HDR_SIZE) {
+			debug("bad ip->ip_len %d < %d\n", len, (int)IP_HDR_SIZE);
+			return;
+		}
 		debug_cond(DEBUG_NET_PKT, "len=%d, v=%02x\n",
 			   len, ip->ip_hl_v & 0xff);
 
@@ -1219,6 +1234,9 @@ void net_process_received_packet(uchar *in_packet, int len)
 		} else if (ip->ip_p != IPPROTO_UDP) {	/* Only UDP packets */
 			return;
 		}
+
+		if (ntohs(ip->udp_len) < UDP_HDR_SIZE || ntohs(ip->udp_len) > ntohs(ip->ip_len))
+			return;
 
 		debug_cond(DEBUG_DEV_PKT,
 			   "received UDP (to=%pI4, from=%pI4, len=%d)\n",

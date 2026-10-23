@@ -25,20 +25,30 @@ extern "C" {
 #define VBMETA_MAX_SIZE			65536
 #define ROLLBACK_MAX_SIZE		20
 #define LOCK_MASK			(1 << 0)
-#define UNLOCK_DISABLE_MASK		(1 << 1)
+#define DISABLE_UNLOCK_MASK		(1 << 1)
 #define VBOOT_STATE_SIZE		1000
 #define PERM_ATTR_SUCCESS_FLAG		1
-/* soc-v use the rsa2048 */
+/* bootloader vboot key length */
+#ifndef CONFIG_FIT_ENABLE_RSA4096_SUPPORT
 #define VBOOT_KEY_SIZE			256
+#else
+#define VBOOT_KEY_SIZE			512
+#endif
 #define RPMB_BASE_ADDR			(64*1024/256)
 #define UBOOT_RB_INDEX_OFFSET		24
 #define TRUST_RB_INDEX_OFFSET		28
-#define ROCHCHIP_RSA_PARAMETER_SIZE	64
+#ifndef CONFIG_FIT_ENABLE_RSA4096_SUPPORT
+#define ROCKCHIP_RSA_PARAMETER_SIZE	64
+#else
+#define ROCKCHIP_RSA_PARAMETER_SIZE	128
+#endif
+#define RK_AVB_RSA_NUM_BYTES		(ROCKCHIP_RSA_PARAMETER_SIZE * sizeof(u_int32_t))
+#define RK_AVB_PERM_ATTR_CER_SIZE	RK_AVB_RSA_NUM_BYTES
 
 struct rk_pub_key {
-	u_int32_t rsa_n[ROCHCHIP_RSA_PARAMETER_SIZE];
-	u_int32_t rsa_e[ROCHCHIP_RSA_PARAMETER_SIZE];
-	u_int32_t rsa_c[ROCHCHIP_RSA_PARAMETER_SIZE];
+	u_int32_t rsa_n[ROCKCHIP_RSA_PARAMETER_SIZE];
+	u_int32_t rsa_e[ROCKCHIP_RSA_PARAMETER_SIZE];
+	u_int32_t rsa_c[ROCKCHIP_RSA_PARAMETER_SIZE];
 };
 
 /**
@@ -122,18 +132,18 @@ int rk_avb_write_permanent_attributes(uint8_t *attributes, uint32_t size);
  *
  * @param flash_lock_state  A flag indicate the device flash state.
  *
- * @return 0 if the command succeeded, -1 if it failed
+ * @return AVB_IO_RESULT_OK if the command succeeded, error code otherwise
  */
-int rk_avb_read_flash_lock_state(uint8_t *flash_lock_state);
+AvbIOResult rk_avb_read_flash_lock_state(uint8_t *flash_lock_state);
 
 /**
  * The function is provided to write device flash state.
  *
  * @param flash_lock_state   A flag indicate the device flash state.
  *
- * @return 0 if the command succeeded, -1 if it failed
+ * @return AVB_IO_RESULT_OK if the command succeeded, error code otherwise
  */
-int rk_avb_write_flash_lock_state(uint8_t flash_lock_state);
+AvbIOResult rk_avb_write_flash_lock_state(uint8_t flash_lock_state);
 
 /**
  * The android things use the flag of lock state to indicate
@@ -141,9 +151,9 @@ int rk_avb_write_flash_lock_state(uint8_t flash_lock_state);
  *
  * @param lock_state  A flag indicate the device lock state.
  *
- * @return 0 if the command succeeded, -1 if it failed
+ * @return AVB_IO_RESULT_OK if the command succeeded, error code otherwise
  */
-int rk_avb_read_lock_state(uint8_t *lock_state);
+AvbIOResult rk_avb_read_lock_state(uint8_t *lock_state);
 
 /**
  * The android things use the flag of lock state to indicate
@@ -151,9 +161,9 @@ int rk_avb_read_lock_state(uint8_t *lock_state);
  *
  * @param lock_state   A flag indicate the device lock state.
  *
- * @return 0 if the command succeeded, -1 if it failed
+ * @return AVB_IO_RESULT_OK if the command succeeded, error code otherwise
  */
-int rk_avb_write_lock_state(uint8_t lock_state);
+AvbIOResult rk_avb_write_lock_state(uint8_t lock_state);
 
 /**
  * The android things uses fastboot to flash the permanent attributes.
@@ -162,9 +172,9 @@ int rk_avb_write_lock_state(uint8_t lock_state);
  * @param flag   indicate the permanent attributes have been written
  *               or not.
  *
- * @return 0 if the command succeeded, -1 if it failed
+ * @return AVB_IO_RESULT_OK if the command succeeded, error code otherwise
  */
-int rk_avb_read_perm_attr_flag(uint8_t *flag);
+AvbIOResult rk_avb_read_perm_attr_flag(uint8_t *flag);
 
 /**
  * The android things uses fastboot to flash the permanent attributes.
@@ -174,9 +184,9 @@ int rk_avb_read_perm_attr_flag(uint8_t *flag);
  *               to indicate the permanent attributes has been
  *               written.
  *
- * @return 0 if the command succeeded, -1 if it failed
+ * @return AVB_IO_RESULT_OK if the command succeeded, error code otherwise
  */
-int rk_avb_write_perm_attr_flag(uint8_t flag);
+AvbIOResult rk_avb_write_perm_attr_flag(uint8_t flag);
 
 /**
  * The android things require the soc-v key hash to be flashed

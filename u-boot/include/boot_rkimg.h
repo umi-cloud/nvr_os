@@ -50,6 +50,7 @@ struct rockchip_image {
 #define TAG_KERNEL			0x4C4E524B
 #define BCB_MESSAGE_BLK_OFFSET		(16 * 1024 >> 9)
 
+#define PART_SECURITY			"security"
 #define PART_UBOOT			"uboot"
 #define PART_TRUST			"trust"
 #define PART_MISC			"misc"
@@ -66,6 +67,7 @@ struct rockchip_image {
 #define PART_USERDATA			"userdata"
 #define PART_META			"meta"
 
+int bootdev_init(const char *devtype, const char *devnum);
 struct blk_desc *rockchip_get_bootdev(void);
 void rockchip_set_bootdev(struct blk_desc *desc);
 void board_run_recovery_wipe_data(void);

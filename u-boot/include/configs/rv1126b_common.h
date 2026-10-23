@@ -65,16 +65,28 @@
 #define OTP_BACK_FW_ENC_KEY_ADDR	(0x28 * 4)
 #define OTP_BACK_FW_ENC_KEY_SIZE	(0x04 * 4)
 
+#define OTP_OEM_KEY0_ADDR		(0x30 * 4)
+#define OTP_OEM_KEY0_SIZE		(0x08 * 4)
+
+#define OTP_OEM_KEY1_ADDR		(0x38 * 4)
+#define OTP_OEM_KEY1_SIZE		(0x08 * 4)
+
+#define OTP_OEM_KEY2_ADDR		(0x40 * 4)
+#define OTP_OEM_KEY2_SIZE		(0x08 * 4)
+
+#define OTP_OEM_KEY3_ADDR		(0x48 * 4)
+#define OTP_OEM_KEY3_SIZE		(0x08 * 4)
+
 #define CONFIG_BOUNCE_BUFFER
 /* For most, U-Boot no need to use 0-1G space. */
 #define CONFIG_SYS_SDRAM_BASE		0x40000000
 #define SDRAM_MAX_SIZE			0xc0000000ULL	/* max 3G */
 #define CONFIG_SYS_NONCACHED_MEMORY	(1 << 20)	/* 1M */
 
-#ifdef CONFIG_SPL_KERNEL_BOOT
 /* spl thunderboot */
 #define SPL_RESV_MEM_SIZE		(2 << 20)	/* 2M */
-#endif
+#define KERNEL_ADDR1_R			0x00200000
+#define KERNEL_ADDR1_AARCH32_R		0x00208000
 
 /* env used only in U-Boot */
 #ifndef CONFIG_SPL_BUILD
@@ -83,20 +95,46 @@
 #define CONFIG_ROCKUSB_G_DNL_PID	0x110f
 
 #ifdef CONFIG_ARM64
+/*
+ * Memory layout:
+ *
+ *     kernel:          2-32M
+ *     compress kernel: 32-48M
+ *     ramdisk:         48-131M (40MB+ ramdisk-as-rootfs on 256MB AOV board)
+ *     fdt:             131M-132M
+ *     optee:           132M-162M
+ *     ramdisk:         162M~   (256MB+ board)
+ */
+/* memory size <= 3GB (0~1G is not available) */
 #define ENV_MEM_LAYOUT_SETTINGS \
 	"scriptaddr=0x40600000\0"	\
 	"pxefile_addr_r=0x40700000\0"	\
 	"fdt_addr_r=0x48300000\0"	\
 	"kernel_addr_r=0x40200000\0"	\
 	"kernel_addr_aarch32_r=0x40208000\0"	\
-	"kernel_addr_c=0x45480000\0"	\
-	"ramdisk_addr_r=0x4a200000\0"
+	"kernel_addr_c=0x42080000\0"	\
+	"ramdisk_addr_low_r=0x43000000\0" \
+	"ramdisk_addr_r=0x4a200000\0" \
+
+/*
+ * 1. memory size > 3GB (max 4G size and 0~1G is available)
+ * 2. uboot and atf run at 1G+, while kernel and ramdisk run at 0-1G
+ */
+#define ENV_MEM_LAYOUT_SETTINGS1 \
+	"scriptaddr1=0x00600000\0"	\
+	"pxefile_addr1_r=0x00700000\0"	\
+	"fdt_addr1_r=0x08300000\0"	\
+	"kernel_addr1_r=__stringify(KERNEL_ADDR1_R)\0"	\
+	"kernel_addr1_aarch32_r=__stringify(KERNEL_ADDR1_AARCH32_R)\0"	\
+	"kernel_addr1_c=0x02080000\0"	\
+	"ramdisk_addr1_r=0x03000000\0"
 #endif
 
 #include <config_distro_bootcmd.h>
 
 #define CONFIG_EXTRA_ENV_SETTINGS \
 	ENV_MEM_LAYOUT_SETTINGS \
+	ENV_MEM_LAYOUT_SETTINGS1 \
 	"partitions=" PARTS_RKIMG \
 	ROCKCHIP_DEVICE_SETTINGS \
 	RKIMG_DET_BOOTDEV \
