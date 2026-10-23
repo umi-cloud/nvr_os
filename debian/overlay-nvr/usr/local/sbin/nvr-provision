@@ -1,5 +1,6 @@
 #!/bin/sh
-# 产线写入设备身份:SN(16 位字母数字,UMNVR3566 开头)与两个网口 MAC,落到 eMMC vendor 区。
+# 产线写入设备身份:SN(16 位字母数字,前缀按芯片:rk3566 板 UMNVR3566、rv1126b 板 UMNVR1126)
+# 与两个网口 MAC,落到 eMMC vendor 区。
 #   nvr-provision <SN> <MAC-gmac1> <MAC-usb>       写入、回读校验
 #   nvr-provision show                              只回读
 # u-boot 下次启动读取:SN → /serial-number(nvr-edge/vsync 的设备 SN,主机名 UMI-<后 6 位>),
@@ -10,6 +11,14 @@
 # **无论成败都退出 0** —— /dev/vendor_storage 打不开、ioctl 失败,命令行上一律看不出来。
 # 靠 set -e 挡不住,只能自己读回来逐字段比。校验不过时退出非零,产线工装据此拦下该机。
 set -e
+
+# SN 前缀按芯片定,rootfs 两颗芯片共用,只能运行时看 dtb
+sn_prefix() {
+	case "$(tr '\0' ' ' < /proc/device-tree/compatible 2>/dev/null)" in
+	*rockchip,rv1126b*) echo UMNVR1126 ;;
+	*) echo UMNVR3566 ;;
+	esac
+}
 
 read_sn() {
 	vendor_storage -r VENDOR_SN_ID -t string 2>/dev/null |
@@ -36,7 +45,8 @@ show() {
 [ "$1" = show ] && { show; exit 0; }
 [ $# -eq 3 ] || { echo "用法: nvr-provision <SN 16位> <MAC-gmac1> <MAC-usb> | show" >&2; exit 2; }
 sn=$1; m1=$(echo "$2" | tr 'A-F' 'a-f'); m2=$(echo "$3" | tr 'A-F' 'a-f')
-case "$sn" in UMNVR3566??????? ) ;; *) echo "SN 必须为 UMNVR3566 开头共 16 位" >&2; exit 1;; esac
+pfx=$(sn_prefix)
+case "$sn" in $pfx??????? ) ;; *) echo "SN 必须为 $pfx 开头共 16 位" >&2; exit 1;; esac
 printf '%s' "$sn" | grep -qE '^[A-Za-z0-9]{16}$' || { echo "SN 只能含字母数字" >&2; exit 1; }
 for m in "$m1" "$m2"; do
 	echo "$m" | grep -qE '^([0-9a-f]{2}:){5}[0-9a-f]{2}$' || { echo "MAC 格式错误: $m" >&2; exit 1; }

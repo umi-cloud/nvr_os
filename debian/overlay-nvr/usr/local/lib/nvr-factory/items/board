@@ -1,13 +1,15 @@
 #!/bin/bash
 # 固件与板型匹配:SATA 板固件烧到无 SATA 板会丢全部 regulator(网口不通),反之丢 SATA/RTC。
-# 判据是 dtb 的 compatible 与 RK809 节点是否存在,两者必须对得上(见 nvr-os CLAUDE.md 板级配置)
+# 判据是 dtb 的 compatible 与 PMIC 节点是否存在,两者必须对得上(见 nvr-os CLAUDE.md 板级配置)
 . /usr/local/lib/nvr-factory/common.sh
 b=$(board)
 # /proc/device-tree 是符号链接,find 必须带末尾斜杠才会进去
-pmic=$(find /proc/device-tree/ -type d -name 'pmic@*' 2>/dev/null | wc -l)
+pmic=$(find /proc/device-tree/ -type d -name 'pmic@*' 2>/dev/null | wc -l)      # RK809(rk3566 SATA 板)
+rk801=$(find /proc/device-tree/ -type d -name 'rk801@*' 2>/dev/null | wc -l)    # RK801(rv1126b 板)
 case "$b" in
 rk3566-nvr-sata) [ "$pmic" -ge 1 ] || { echo "SATA board dtb but no RK809 node"; exit 1; } ;;
 rk3566-nvr) [ "$pmic" -eq 0 ] || { echo "non-SATA board dtb but has RK809 node"; exit 1; } ;;
+rv1126b-nvr-sata) [ "$rk801" -ge 1 ] || { echo "RV1126B board dtb but no RK801 node"; exit 1; } ;;
 *) echo "unknown board: $(tr '\0' ' ' < /proc/device-tree/compatible)"; exit 1 ;;
 esac
 echo "$b"

@@ -132,6 +132,15 @@ if [ -n "$CROSS_GCC" ] && [ -f $NPU_MODEL ]; then
 else
 	echo -e "\033[31m 未找到交叉编译器或 external/rknpu2,产测 npu 项将判失败 \033[0m"
 fi
+# RV1126B 板的 NPU 模型(rknn 模型不跨平台,common.sh 按板型选文件)。rknpu2 示例树里没有
+# RV1126B 目录,文件取自 /data/backup/sdk-inspect/rknpu2x/usr/share/model/RV1126B/,手工放到这里
+NPU_MODEL_RV1126B=$RKNPU2/examples/rknn_mobilenet_demo/model/RV1126B/mobilenet_v1.rknn
+if [ -f $NPU_MODEL_RV1126B ]; then
+	sudo install -D -m 644 $NPU_MODEL_RV1126B $TARGET_ROOTFS_DIR/usr/local/lib/nvr-factory/npu-check-rv1126b.rknn
+	echo -e "\033[36m RV1126B 版 NPU 测试模型已装入 \033[0m"
+else
+	echo -e "\033[31m 未找到 RV1126B 版 NPU 模型,rv1126b 板产测 npu 项将判失败 \033[0m"
+fi
 
 # 串口 getty:Rockchip overlay 的 serial-getty@.service 写死 --autologin root,串口敲回车
 # 直接进 root shell、连密码都不要。去掉它,串口按 root/root 登录(CLAUDE.md 记的兜底方式)。

@@ -9,17 +9,25 @@ NPU_MODEL=$FACTORY_LIB/npu-check.rknn
 # 恢复出厂与整机重烧都不擦
 STAGE_ID=VENDOR_CUSTOM_ID_20
 
-. /etc/nvr/factory.conf
-# 调试用覆盖,在 /run 下,重启即失效,不会带进出厂状态
-[ -f "$FACTORY_RUN/factory.conf" ] && . "$FACTORY_RUN/factory.conf"
-
-# 板型:rk3566-nvr-sata / rk3566-nvr / 空(未知)
+# 板型:rk3566-nvr-sata / rk3566-nvr / rv1126b-nvr-sata / 空(未知)
 board() {
 	case "$(tr '\0' ' ' < /proc/device-tree/compatible 2>/dev/null)" in
 	*rockchip,rk3566-nvr-ddr3-sata-v1.0*) echo rk3566-nvr-sata ;;
 	*rockchip,rk3566-nvr-ddr3-v1.0*) echo rk3566-nvr ;;
+	*rockchip,rv1126b-nvr-sata-v1.0*) echo rv1126b-nvr-sata ;;
 	esac
 }
+
+. /etc/nvr/factory.conf
+# 板型差异(内存容量、无 HDMI/TF 等)放 factory-<板型>.conf,叠加在通用阈值之上
+[ -f "/etc/nvr/factory-$(board).conf" ] && . "/etc/nvr/factory-$(board).conf"
+# 调试用覆盖,在 /run 下,重启即失效,不会带进出厂状态
+[ -f "$FACTORY_RUN/factory.conf" ] && . "$FACTORY_RUN/factory.conf"
+
+# NPU 测试模型按芯片分(rknn 模型不跨平台),文件由 mk-rootfs-bookworm.sh 装入
+case "$(board)" in
+rv1126b-*) NPU_MODEL=$FACTORY_LIB/npu-check-rv1126b.rknn ;;
+esac
 
 # 读厂商区某 ID 的原始字节(-t file 落盘,不经 vendor_storage 的打印格式);未写过时输出为空
 vendor_read() {
@@ -40,6 +48,14 @@ stage_set() {
 }
 
 sn_get() { vendor_read VENDOR_SN_ID | grep -aoE 'UMNVR[0-9A-Za-z]+' | head -1; }
+
+# SN 前缀按芯片:rk3566 板 UMNVR3566,rv1126b 板 UMNVR1126(与 nvr-provision 一致)
+sn_prefix() {
+	case "$(board)" in
+	rv1126b-*) echo UMNVR1126 ;;
+	*) echo UMNVR3566 ;;
+	esac
+}
 
 # 所有 thermal zone 的最高温度(摄氏度)
 max_temp_c() {

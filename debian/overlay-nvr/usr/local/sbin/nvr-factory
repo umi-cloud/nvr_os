@@ -41,6 +41,8 @@ items_for() {
 	# SATA 板没有 TF 卡槽(2026-10-20 确认)
 	rk3566-nvr-sata) echo board ddr emmc eth usbeth sata usb3 rtc npu venc thermal watchdog hdmi ;;
 	rk3566-nvr) echo board ddr emmc eth usb3 tf npu venc thermal watchdog hdmi ;;
+	# RV1126B SATA 板:无 HDMI、无 TF;USB3 只有硬盘桥这一路(并入 sata 项),前面板 USB-A 是 USB2 → usb 项
+	rv1126b-nvr-sata) echo board ddr emmc eth usbeth sata usb rtc npu venc thermal watchdog ;;
 	esac
 }
 
@@ -176,13 +178,13 @@ run_items() {
 # ---------- 扫码写号 ----------
 
 # 解析一次扫码,输出 "<SN 或 -> [MAC...]"(MAC 规范成小写冒号分隔);什么都没扫到或有对不上
-# 的片段返回 1。SN 按 UMNVR3566+7 位字母数字取;其余每段十六进制片段必须恰好是一个 MAC
+# 的片段返回 1。SN 按本板前缀(sn_prefix,UMNVR3566/UMNVR1126)+7 位字母数字取;其余每段十六进制片段必须恰好是一个 MAC
 # (12 位,或 6 组以 : / - 分隔)或两个连写的 MAC(24 位),否则整条拒绝 —— 宁可重扫,
 # 不能写错号(例如 "MAC1:02AA.." 若宽松匹配会把 "C1" 吞进 MAC)
 scan_fields() {
 	local s sn=- t run hex macs= m
 	s=$(printf '%s' "$1" | tr -d '\r')
-	t=$(printf '%s' "$s" | grep -oE 'UMNVR3566[0-9A-Za-z]{7}' | head -1)
+	t=$(printf '%s' "$s" | grep -oE "$(sn_prefix)[0-9A-Za-z]{7}" | head -1)
 	[ -n "$t" ] && { sn=$t; s=${s/$sn/ }; }
 	for run in $(printf '%s' "$s" | grep -oE '[0-9A-Fa-f:-]+'); do
 		hex=$(printf '%s' "$run" | tr -d ':-')

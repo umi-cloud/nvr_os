@@ -1,15 +1,37 @@
 #!/bin/bash
-# SATA 硬盘位:识别到 ATA 盘 + 顺序读速率。只读不写,工装盘可反复使用
+# SATA 硬盘位:识别到硬盘 + 顺序读速率。只读不写,工装盘可反复使用。
+# rk3566 是原生 SATA(ata 链路);rv1126b 无原生 SATA,硬盘挂在 JMS578 USB3-SATA 桥后面,
+# 是整板唯一的 5Gbps USB 设备(前面板 USB-A 只有 USB2),按 USB 协商速率找,顺带验证了 USB3 链路
 . /usr/local/lib/nvr-factory/common.sh
-dev=
-for b in /sys/block/sd*; do
-	[ -e "$b" ] || continue
-	readlink -f "$b" | grep -q '/ata[0-9]' && { dev=${b##*/}; break; }
-done
-[ -n "$dev" ] || { echo "no SATA disk found"; exit 1; }
-spd=$(cat /sys/class/ata_link/link*/sata_spd 2>/dev/null | grep -v '<unknown>' | head -1)
+dev=; link=
+case "$(board)" in
+rv1126b-nvr-sata)
+	for b in /sys/block/sd*; do
+		[ -e "$b" ] || continue
+		s=$(usb_speed_of "${b##*/}")
+		[ -n "$s" ] && [ "$s" -ge 5000 ] && { dev=${b##*/}; link="usb ${s}Mbps"; break; }
+	done
+	[ -n "$dev" ] || { echo "no disk behind USB3-SATA bridge (no 5Gbps USB disk)"; exit 1; }
+	# 桥片走 uas 才有完整性能,掉到 usb-storage 说明 UAS 被禁或内核缺配置
+	d=$(readlink -f "/sys/block/$dev/device")
+	while [ -n "$d" ] && [ "$d" != / ]; do
+		[ -L "$d/driver" ] && case "$(basename "$(readlink -f "$d/driver")")" in
+			uas | usb-storage) link="$link $(basename "$(readlink -f "$d/driver")")"; break ;;
+		esac
+		d=${d%/*}
+	done
+	;;
+*)
+	for b in /sys/block/sd*; do
+		[ -e "$b" ] || continue
+		readlink -f "$b" | grep -q '/ata[0-9]' && { dev=${b##*/}; break; }
+	done
+	[ -n "$dev" ] || { echo "no SATA disk found"; exit 1; }
+	link=$(cat /sys/class/ata_link/link*/sata_spd 2>/dev/null | grep -v '<unknown>' | head -1)
+	;;
+esac
 # 先读一小段:盘刚上电或休眠时首读含起转与寻道,实测 5400 转盘首读 44MB/s、之后 92MB/s
 read_mbps "/dev/$dev" 32 >/dev/null || { echo "$dev read failed"; exit 1; }
 mbps=$(read_mbps "/dev/$dev" 256) || { echo "$dev read failed"; exit 1; }
-[ "$mbps" -ge "$SATA_MIN_MBPS" ] || { echo "$dev read ${mbps}MB/s < ${SATA_MIN_MBPS}MB/s (link ${spd:-?})"; exit 1; }
-echo "$dev link ${spd:-?}, read ${mbps}MB/s"
+[ "$mbps" -ge "$SATA_MIN_MBPS" ] || { echo "$dev read ${mbps}MB/s < ${SATA_MIN_MBPS}MB/s (link ${link:-?})"; exit 1; }
+echo "$dev link ${link:-?}, read ${mbps}MB/s"

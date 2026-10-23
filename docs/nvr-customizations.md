@@ -60,6 +60,7 @@ RK809 与 HYM8563 的 RTC 取舍、电源域、RGMII 时延、ISP/CSI 链禁用�
 | `usr/local/bin/memtester` | 取自 Rockchip `overlay-debug`(4.5.0),产测 ddr 项与老化要用;rootfs 改 release 构建后不再带 overlay-debug |
 | `usr/local/sbin/nvr-factory` + `usr/local/lib/nvr-factory/` | 产测:按 vendor 区阶段标记决定开机行为,单板自动测试、tty1 显示、写号与出厂收尾 |
 | `etc/nvr/factory.conf` | 产测判定阈值 |
+| `etc/nvr/factory-rv1126b-nvr-sata.conf` | RV1126B SATA 板的产测阈值覆盖(common.sh 按板型 source) |
 | `usr/lib/systemd/system/*.service.d/10-nvr-factory.conf` | 产测期间不启动 getty@tty1、nvr、vsync |
 | `usr/local/sbin/nvr-usb-eth-link` | 按 vendor 区第二个 MAC 生成 USB 网口的 `.link` |
 | `usr/local/sbin/nvr-hostname` | 主机名设为 `UMI-<SN 后 6 位>` |

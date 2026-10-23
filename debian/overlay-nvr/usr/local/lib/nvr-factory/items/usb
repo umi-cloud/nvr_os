@@ -1,0 +1,15 @@
+#!/bin/bash
+# USB2 口(rv1126b 板前面板两个 USB-A 挂在 PL2586 hub 下,只有 USB2):工装 U 盘必须以 480Mbps
+# 枚举 + 顺序读。两个口在软件里分不开,产线两口都插盘;这里只要求至少找到一个 USB2 盘
+. /usr/local/lib/nvr-factory/common.sh
+best=; bestmbps=0
+for b in /sys/block/sd*; do
+	[ -e "$b" ] || continue
+	s=$(usb_speed_of "${b##*/}")
+	[ "$s" = 480 ] || continue   # 5000 的是 SATA 桥,12/1.5 是插错了低速设备
+	mbps=$(read_mbps "/dev/${b##*/}" 64) || continue
+	[ "$mbps" -gt "$bestmbps" ] && { best=${b##*/}; bestmbps=$mbps; }
+done
+[ -n "$best" ] || { echo "no USB2 disk inserted"; exit 1; }
+[ "$bestmbps" -ge "$USB2_MIN_MBPS" ] || { echo "$best read ${bestmbps}MB/s < ${USB2_MIN_MBPS}MB/s"; exit 1; }
+echo "$best 480Mbps, read ${bestmbps}MB/s"
