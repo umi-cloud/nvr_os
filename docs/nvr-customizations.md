@@ -24,7 +24,7 @@
 |---|---|---|
 | `arch/arm64/boot/dts/rockchip/rk3566-nvr-ddr3-v1.0.dts` | 新增 | 无 SATA 板设备树,override 风格基于官方 box-demo dtsi |
 | `arch/arm64/boot/dts/rockchip/rk3566-nvr-ddr3-sata-v1.0.dts` | 新增 | SATA 板,include 上一份只维护差异 |
-| `arch/arm64/configs/nvr.config` | 新增 | defconfig 片段,与官方 `rk3566.config` 叠加使用;2026-10-21 起 device-mapper 核心内置(`BLK_DEV_DM`、`DM_UEVENT`,不开具体 target);A/B 升级(RAUC)另开 `BLK_DEV_LOOP`、`DM_VERITY`、`BLK_DEV_NBD` |
+| `arch/arm64/configs/nvr.config` | 新增 | defconfig 片段,与官方 `rk3566.config` 叠加使用;2026-10-21 起 device-mapper 核心内置(`BLK_DEV_DM`、`DM_UEVENT`,不开具体 target) |
 | `arch/arm64/boot/dts/rockchip/rv1126b-nvr-sata-v1.0.dts` | 新增 | RV1126B NVR SATA 板(UMI-NVR-RV1126B-V1.0),独立 dts 不 include EVB dtsi;2026-10-21 建档,真机未验 |
 | `arch/arm64/configs/rv1126b-nvr.config` | 新增 | RV1126B 板级片段,叠加在官方 `rv1126b_defconfig` 上(USB 存储/UAS、RTL8152、PHY、LED、MPP、容器) |
 | `arch/arm64/boot/dts/rockchip/Makefile` | 修改 | 加入 `rv1126b-nvr-sata-v1.0.dtb`(原 Luckfox Aura 条目已随该板型删除) |
