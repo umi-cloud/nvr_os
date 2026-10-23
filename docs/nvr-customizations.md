@@ -83,7 +83,7 @@ systemd-run 代执行挂盘与写网络配置),改之前先读该文件的注释
 | `rv1126b/BoardConfig-rv1126b-nvr-sata-v1.0.mk` | 新增,RV1126B 自研 SATA 板(双网口,SATA 走 JMS578 USB3 桥);2026-10-21 替代 Luckfox Aura 开发板板型 |
 | `rv1126b/parameter-nvr.txt` | 软链到 `rk356x/parameter-nvr.txt`,与 rk3566 共用分区表 |
 | `rv1126b/parameter.txt`、`boot.its`、`boot4recovery.its` | 取自官方 rv1126b SDK,未改 |
-| `common/build.sh` | rootfs 改为 `VERSION=release` 构建(原 debug,会带 overlay-debug 的 rockchip-test、demo 与测试视频);`updateimg` 打包前核对 boot.img 板型与 rootfs 模块,打完按板型归档到 `rockdev/<板型>/` |
+| `common/build.sh` | rootfs 改为 `VERSION=release` 构建(原 debug,会带 overlay-debug 的 rockchip-test、demo 与测试视频);`updateimg` 打包前核对 loader/u-boot 芯片、boot.img 板型、parameter 与 rootfs 模块 |
 
 其余 BoardConfig 与 `parameter-buildroot-*` 已于 2026-09-08 随旧板下线删除。
 
@@ -97,6 +97,7 @@ systemd-run 代执行挂盘与写网络配置),改之前先读该文件的注释
 | `buildroot/fs/cpio/cpio.mk` | 一处改动 |
 | `docs/nvr-edge-integration.md` | rootfs 对下发组件承诺的 ABI 面 |
 | `docker/` | 编译环境,Dockerfile 与 run.sh,宿主机缺依赖必须走它 |
+| `release.sh` | 新增,出货固件唯一入口:加锁、切板、全量重编、核对后按板型出包到 `rockdev/<板型>/` |
 | `CLAUDE.md` / `README.md` | 工作约定与仓库说明 |
 
 `rkbin/` 的唯一提交是原厂的 checkpatch 脚本改动,不是本项目的。

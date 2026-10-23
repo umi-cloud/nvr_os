@@ -328,10 +328,16 @@ mkfs.ext4,按 PARTLABEL 挂到 `/userdata`、`/vcache`。(原自写的 format-da
 
 `rockdev/` 下产物用 RKDevTool(Windows,`RKDevTool_Release_v3.19/`)或 `rkflash.sh` / upgrade_tool 烧写。
 整机包:`./build.sh updateimg`(宿主机跑)→ `rockdev/update.img`,RKDevTool 升级固件页或 upgrade_tool uf 一键烧。
-⚠ `kernel/boot.img`、`u-boot/uboot.img`、`debian/linaro-rootfs.img`、`rockdev/update.img` **两颗芯片共用同一路径**,
-切板后谁最后编就是谁的产物(2026-10 曾混出 RK3566 分区表 + RV1126B 内核的整包)。`updateimg` 打包前会核对
-boot.img 的 dtb 属于当前板型、rootfs 的模块与当前内核一致,不符即报错;打完自动归档到
-`rockdev/<板型>/update-<板型>-<日期时间>.img`,刷机用归档件,别用会被覆盖的 `rockdev/update.img`。
+**出货固件一律用 `./release.sh <板型>`**(宿主机跑,如 `./release.sh rk3566-nvr-ddr3-sata-v1.0`、
+`./release.sh rv1126b-nvr-sata-v1.0`):加锁 → 切 `.BoardConfig.mk` → 全量编 uboot/kernel/debian →
+mkfirmware → updateimg → 出包到 `rockdev/<板型>/<板型>-<时间>/`(整包、分区单烧件、自动生成的 README
+与 SHA256SUMS、build.log)和同名 zip。约 15~20 分钟,跑完 `.BoardConfig.mk` 停在该板型。
+原因:`.BoardConfig.mk`、`kernel/`、`u-boot/`、`debian/` 的产物和 `rockdev/` 软链**两颗芯片共用**,
+谁最后编就是谁的;2026-10 曾出过 RV1126B 内核配 RK3566 loader/u-boot 的整包(只换编了内核就打包)。
+`build.sh updateimg` 打包前逐项核对:loader 属于本芯片、uboot.img 的 dtb 属于本芯片、boot.img 的 dtb
+属于本板型、parameter 是本板的、rootfs 模块与当前内核一致,不符即报错不出包。
+锁只拦另一个 release.sh,直接调 build.sh 的构建拦不住:出货前确认没人在同一目录编另一颗芯片。
+`rockdev/update.img` 会被下一次打包覆盖,刷机用 `rockdev/<板型>/` 下的出包件。
 MaskRom 下先 `upgrade_tool db <loader>` 再 `uf`,直接 `uf` 常报通信失败。
 
 ⚠ **SDK 里有两个 upgrade_tool,别用错**:

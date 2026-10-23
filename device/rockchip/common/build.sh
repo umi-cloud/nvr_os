@@ -1661,18 +1661,36 @@ function build_updateimg(){
 			./mkupdate.sh
 		fi
 		mv update.img $IMAGE_PATH
-		archive_updateimg
 	fi
 
 	finish_build
 }
 
-# kernel/、u-boot/、debian/ 的产物路径与芯片无关,切板后没全量重编就打包会混出别的板的固件
-# (2026-10 实测:RK3566 分区表 + RV1126B 内核)。打包前核对 boot.img 的 dtb 与 rootfs 的模块
+# kernel/、u-boot/、debian/ 与 rockdev/ 的软链两颗芯片共用,切板后没全量重编就打包会混出别的板的固件
+# (2026-10 实测:RV1126B 内核配 RK3566 的 loader 与 u-boot)。打包前逐个核对芯片与板型,出货走 release.sh
 function check_updateimg_inputs(){
-	local boot=$TOP_DIR/rockdev/boot.img rootfs=$TOP_DIR/rockdev/rootfs.img
-	local kdir=$TOP_DIR/${RK_KERNEL_DIR:-kernel} kver
+	local rd=$TOP_DIR/rockdev boot=$TOP_DIR/rockdev/boot.img rootfs=$TOP_DIR/rockdev/rootfs.img
+	local kdir=$TOP_DIR/${RK_KERNEL_DIR:-kernel} kver soc
 
+	# u-boot 用芯片级 dtb:rk356x 全系用 rk3568-evb
+	case "$RK_TARGET_PRODUCT" in
+	rk356x) soc=rk3568 ;;
+	*) soc=$RK_TARGET_PRODUCT ;;
+	esac
+	# 整包的芯片标记取自 loader 文件头,loader 错了整包就标成别的芯片
+	case "$(basename "$(readlink -f $rd/MiniLoaderAll.bin)")" in
+	${RK_TARGET_PRODUCT}_*) ;;
+	*) echo "ERROR: MiniLoaderAll.bin 不是 $RK_TARGET_PRODUCT 的 loader,先重编: ./docker/run.sh ./build.sh uboot" >&2
+		return 1 ;;
+	esac
+	if ! grep -aqF "rockchip,$soc" "$rd/uboot.img"; then
+		echo "ERROR: uboot.img 不是 $soc 的 u-boot,先重编: ./docker/run.sh ./build.sh uboot" >&2
+		return 1
+	fi
+	if [ "$(readlink -f $rd/parameter.txt)" != "$(readlink -f $TOP_DIR/device/rockchip/$RK_TARGET_PRODUCT/$RK_PARAMETER)" ]; then
+		echo "ERROR: rockdev/parameter.txt 不是本板的 $RK_PARAMETER,先跑 ./mkfirmware.sh" >&2
+		return 1
+	fi
 	# FIT 里的 fdt 未压缩,compatible 首项即 rockchip,<dts 名>
 	if ! grep -aqF "rockchip,$RK_KERNEL_DTS" "$boot"; then
 		echo "ERROR: boot.img 不是 $RK_KERNEL_DTS 的内核,先重编: ./docker/run.sh ./build.sh kernel" >&2
@@ -1685,17 +1703,6 @@ function check_updateimg_inputs(){
 		echo "ERROR: rootfs 里的内核模块与当前内核不一致,先重建: ./docker/run.sh ./build.sh debian" >&2
 		return 1
 	fi
-}
-
-# 按板型归档一份带时间戳的整包:rockdev/update.img 会被下一次打包(或别的板)覆盖
-function archive_updateimg(){
-	local board dir
-	board=$(basename "$(readlink -f $TOP_DIR/device/rockchip/.BoardConfig.mk)" .mk)
-	board=${board#BoardConfig-}
-	dir=$TOP_DIR/rockdev/$board
-	mkdir -p $dir
-	cp -p $IMAGE_PATH/update.img $dir/update-$board-$(date +%Y%m%d-%H%M).img
-	echo "已归档: rockdev/$board/update-$board-$(date +%Y%m%d-%H%M).img"
 }
 
 function build_otapackage(){
