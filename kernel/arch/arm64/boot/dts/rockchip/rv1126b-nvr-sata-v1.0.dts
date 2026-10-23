@@ -2,7 +2,7 @@
 /*
  * NVR 板 RV1126B SATA 版(原理图 UMI-NVR-RV1126B-V1.0,2026-01-27):
  * LPDDR3、eMMC 系统盘、RK801 PMIC、SoC 内置 RTC(CR1220 备电)、
- * 千兆 RGMII(YT8531C / RTL8211F 二选一,M1 引脚组)、
+ * 千兆 RGMII(BOM 定为 RTL8211F-CG,M1 引脚组)、
  * USB 百兆网口 RTL8152B、SATA 硬盘位走 JMS578 USB3-SATA 桥(RV1126B 无原生 SATA)。
  *
  * 本文件不 include EVB dtsi(EVB 带摄像头/MIPI 屏/WiFi,本板都没有),电源树与 PMIC
@@ -181,9 +181,12 @@
 
 &mdio {
 	/*
-	 * YT8531C-CA 或 RTL8211F-CG(第 22 页,封装兼容二选一),PHY 地址由 strap 定,默认 3'b001。
-	 * 不写 PHY ID,两颗都走各自驱动或 Generic PHY。
-	 * clocks 必须给:25MHz 由 SoC 输出,没人引用会在启动后期被当闲置时钟关掉,
+	 * BOM(2026-10-22)定为 RTL8211F-CG;原理图第 22 页按 YT8531C 画,两者封装兼容但 strap 含义不同,
+	 * PHY 地址、RGMII 时延 strap、LED 行为都要上板读回确认,地址对不上就改 reg(或用 mdio 扫描结果)。
+	 * ⚠ BOM 同时贴了 Y6600 25MHz 晶振、R6614 0R(MAC 时钟进 XTAL_OUT)和 R6612 0R(XTAL_IN 接地),
+	 * 三者互斥;RTL8211F 的外部时钟只能从 XTAL_IN 进,按现 BOM PHY 没有时钟。硬件改法见 CLAUDE.md。
+	 * 这里保持 SoC 输出 25M 并引用该时钟,PHY 无论改成晶振还是外部时钟都不用改 dts。
+	 * clocks 必须给:没人引用的时钟会在启动后期被当闲置关掉,
 	 * 表现为 PHY ID 能读但永远 NO-CARRIER(Luckfox Aura 实测踩过)
 	 */
 	rgmii_phy: ethernet-phy@1 {

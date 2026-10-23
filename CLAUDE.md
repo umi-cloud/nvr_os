@@ -1,6 +1,6 @@
 # nvr-os — RK3566 / RV1126B Linux SDK
 
-主线是 RK3566。**RV1126B 工作已于 2026-10-21 停止**,文件保留备查:RV1126B 于 2026-09-16 接入,自研 SATA 版型 `rv1126b-nvr-sata-v1.0` 于 2026-10-21
+主线是 RK3566。RV1126B 板子未到手,软件按原理图与 BOM 先行适配(产测、dts、打包已能出包,真机未验):RV1126B 于 2026-09-16 接入,自研 SATA 版型 `rv1126b-nvr-sata-v1.0` 于 2026-10-21
 按原理图建档,**真机未验**(此前验证软件栈用的 Luckfox Aura 开发板板型已同日删除,
 实测结论保留在 git 历史与新板 dts 注释里)。单内核单 rootfs:
 - `kernel/`:6.1.172(armbian 官方镜像 `rk-6.1-rkr7.2`,无需账号)。2026-10-21 由 `rk-6.1-rkr6.1`(6.1.118)升级,
@@ -135,7 +135,8 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   都退出 0,靠 `set -e` 挡不住。`nvr-provision` 因此在写完后**回读逐字段比对**,不一致即退出非零,
   产线工装应据退出码拦机。样机上实测过这个坑:MAC 有值而 SN 一直是空的,旧版脚本照样打印
   「已写入」并退出 0(`/proc/device-tree/serial-number` 那时回落到 SoC 芯片 ID)。
-  SN 16 位、`UMNVR3566` 开头;u-boot 下次启动把 SN 注入 `/serial-number`(nvr-edge/vsync 的设备 SN),
+  SN 16 位,前缀按芯片:rk3566 板 `UMNVR3566`、rv1126b 板 `UMNVR1126`(nvr-provision 与产测扫码解析
+  运行时看 dtb 决定);u-boot 下次启动把 SN 注入 `/serial-number`(nvr-edge/vsync 的设备 SN),
   MAC1 注入 gmac1(dts 别名 `ethernet0`,因此网口名是 **end0**);MAC2 给 USB 网口(r8152 无 EEPROM,
   开机随机):`nvr-usb-eth-link` 按 vendor 区生成 `/etc/systemd/network/20-usb-eth.link`,由 udev 在网卡
   出现、尚未 UP 时套上,**写文件后下次开机生效**。不要在运行中改 r8152 的 MAC(曾间歇性 Tx timeout
@@ -156,7 +157,11 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   SATA 灯 LED2/LED3 由 GPIO3_D0 使能、硬盘 DAS 驱动,不受产测控制):单板测试中快闪、
   老化中心跳闪、通过常亮、任何一步失败慢闪(1 秒)。老化架无显示器,只看这颗灯
   ⚠ **开发板影响**:新刷机、没写过 SN 的板子开机会进产测、nvr-edge 不起来,开发时
-  `nvr-factory stage set shipped` 后重启;产测上线前已写过 SN 的板子不受影响。RV1126B 等未适配板型直接正常启动。
+  `nvr-factory stage set shipped` 后重启;产测上线前已写过 SN 的板子不受影响。未适配产测的板型(官方 EVB 等)直接正常启动。
+  **rv1126b-nvr-sata 已适配**(2026-10-21,未上板):项为 board ddr emmc eth usbeth sata usb rtc npu venc thermal watchdog,
+  无 hdmi/tf;sata 项按"唯一的 5Gbps USB 盘"找 JMS578 后面的硬盘并报 uas/usb-storage,usb 项测前面板 USB2 口;
+  板级阈值在 `etc/nvr/factory-rv1126b-nvr-sata.conf`(DDR 容量等待 BOM);NPU 模型按板型分
+  (`npu-check-rv1126b.rknn`,来源见 mk-rootfs-bookworm.sh)。SN 前缀 `UMNVR1126`。
   **运行时输出一律英文**(fbcon 只有西文字形;注释仍用中文)。tty1 顶部彩色结论栏 + 全部测试项与测量值,
   内核只编 16x32 字体使 1080p 下可读(720p 一屏 22 行,SATA 板 13 项占 20 行,再加项要换布局)。
   ⚠ tty1 画面依赖 nvr.config 2026-10-20 补的 `CONFIG_FB`/`DRM_FBDEV_EMULATION`:此前内核 FB 未开,
@@ -273,8 +278,16 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
     **真机未验**)。DTS `rv1126b-nvr-sata-v1.0`(独立 dts 不 include EVB dtsi,电源树照官方 EVB1 V12:
     CPU PWM 调压 + RK801 PMIC 供 NPU/LOGIC/DDR/1V8/3V3)+ 片段 `rv1126b-nvr.config`(在 Aura 片段基础上加
     SCSI/USB 存储/UAS、RTL8152、motorcomm/realtek PHY、gpio-leds)。
-    硬件:LPDDR3、eMMC 系统盘、SoC 内置 RTC(CR1220 备电)、千兆 RGMII(YT8531C/RTL8211F 二选一,
-    **M1 引脚组**,PHY 25M 由 SoC 输出,复位 GPIO5_B4)、USB 百兆 RTL8152B。
+    硬件(BOM 2026-10-22 核对):LPDDR3(容量 BOM 未标)、eMMC 64G、SoC 内置 RTC(CR1220 备电)、
+    千兆 RGMII **RTL8211F-CG**(原理图按 YT8531C 画,strap 含义不同,地址/时延上板读回;**M1 引脚组**,
+    复位 GPIO5_B4;⚠ BOM 同时贴了晶振 Y6600 与 R6612/R6614 0R,按 YT8531C 的外部时钟接法,RTL8211F 这样接
+    没有时钟,改法:去 R6612/R6614、补 C6605/C6606 18pF 走晶振,或去晶振与 R6612、把 25M 飞到 XTAL_IN)、
+    USB 百兆 RTL8152B、**RTL8822BS WiFi/BT 模组已贴(U6200,SDIO+UART2)但 dts/内核未配**、
+    音频(TCS7191A 功放、MIC、耳机座)已贴未配。J4 调试串口与 J9 USB 下载座 BOM 都贴(2.54mm 4 针),
+    引脚按 PCB 文件(PADS,4 层 177×178mm,元件全在顶层;原理图/PCB/BOM 与评审改板清单在
+    `/data/Projects/UMI-NVR-RV1126B/`,2026-10-22 从本仓根目录迁出):
+    J4 1=GND 2=TX 3=RX 4=3V3;J9 1=5V(勿接)2=D+ 3=D- 4=GND,J9 直接并在 PL2586 上游脚上。
+    MaskRom 测试点 TP1500/TP1501 在 SoC 旁(117,97)/(117,95)mm。
     **RV1126B 无原生 SATA**:硬盘走 JMS578 USB3-SATA 桥——SS 对接 dwc3(固定 host,USB2 对接 PL2586 hub,
     hub 下游 2 个 USB-A + RTL8152B),JMS578 的 USB2 对接 EHCI 作降级。盘在系统里是 USB(UAS)盘,
     产测的 sata 项与 nvr-edge 挂盘逻辑若按 /dev/sda 的 SATA 属性判断需适配。
