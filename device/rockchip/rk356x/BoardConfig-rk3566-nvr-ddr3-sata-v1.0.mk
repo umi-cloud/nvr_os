@@ -1,5 +1,5 @@
 #!/bin/bash
-# NVR 板 SATA 版 (UMI-NVR-RK3566-V1.0, 8bit DDR3, RTL8211F PHY)
+# NVR 板 SATA 版 (原理图 UMI-NVR-RK3566-V2.1, 8bit DDR3, RTL8211F PHY)
 # 与无 SATA 板(v1.0)差异:SATA 硬盘位(sata2/combphy2)、RK809-5 PMIC、HYM8563 RTC
 # 内核 6.1 + Debian 12 headless;无 WiFi/BT/vfd 硬件
 

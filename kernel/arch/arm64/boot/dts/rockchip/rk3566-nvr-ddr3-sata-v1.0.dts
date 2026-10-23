@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /*
- * NVR 板 SATA 版 (UMI-NVR-RK3566-V1.0):8bit DDR3, RTL8211F PHY, SATA 硬盘位,
+ * NVR 板 SATA 版 (原理图 UMI-NVR-RK3566-V2.1,硬件与 V1.0 仅灯路不同):8bit DDR3, RTL8211F PHY, SATA 硬盘位,
  * RK809-5 PMIC, HYM8563 RTC(CR1220 备电)— kernel 6.1
  * 基于 rk3566-nvr-ddr3-v1.0 全量复用,本文件维护差异:SATA / RK809 电源树 / RTC / 音频
  * 新板实测参数(RGMII 时延等)如与无 SATA 板有出入,在本文件覆盖
@@ -12,7 +12,17 @@
 	model = "RK3566 NVR DDR3 SATA V1.0 Board";
 	compatible = "rockchip,rk3566-nvr-ddr3-sata-v1.0", "rockchip,rk3566";
 
-	/* 工作灯 WORKING_LEDEN_H_GPIO0_C3 由 box-demo dtsi 的 work-led 覆盖(timer 触发),无需另配 */
+	/*
+	 * 工作灯 WORKING_LEDEN_H_GPIO0_C3 由 box-demo dtsi 的 work-led 覆盖,高电平亮 LED2001。
+	 * V2.1 新增 SATA 灯 LED2/LED3:GPIO3_D0 经 240R 接阳极,阴极接硬盘口 DAS(18 脚)。
+	 * GPIO 拉高只是使能,亮灭由硬盘读写时拉低 DAS 决定;不插盘或 GPIO 不拉高都不亮
+	 */
+	gpio-leds {
+		sata-led {
+			gpios = <&gpio3 RK_PD0 GPIO_ACTIVE_HIGH>;
+			default-state = "on";
+		};
+	};
 
 	/*
 	 * RK809 codec 声卡(SPK_MINI 8Ω/1.3W 直推 + MIC1 差分)。

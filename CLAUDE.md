@@ -150,7 +150,9 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
   阶段 → `shipped`,然后**重启**而非关机:组装工位若没上过电,第一次上电的就是用户)→ 正常启动;
   ssh 手动 `nvr-factory finish` 仍默认关机。收尾清空 machine-id,DHCP 客户端标识随之变化,IP 会变;
   **产测期间 getty@tty1、nvr、vsync 都不启动**(drop-in 条件)。
-  **工作灯约定**(板上只有工作灯 GPIO0_C3 可控,另一颗蓝灯 LED1 直接接 3.3V 是电源灯):单板测试中快闪、
+  **工作灯约定**(GPIO0_C3 高电平点亮 LED2001;V2.1 的 LED1 与之并联,阴极接 2P 插座,插座不接就不亮。
+  V1.0 时 LED1 接在 3.3V 与 GPIO0_C3 之间、低电平亮,曾被误记为"直接接 3.3V 的电源灯"。
+  SATA 灯 LED2/LED3 由 GPIO3_D0 使能、硬盘 DAS 驱动,不受产测控制):单板测试中快闪、
   老化中心跳闪、通过常亮、任何一步失败慢闪(1 秒)。老化架无显示器,只看这颗灯
   ⚠ **开发板影响**:新刷机、没写过 SN 的板子开机会进产测、nvr-edge 不起来,开发时
   `nvr-factory stage set shipped` 后重启;产测上线前已写过 SN 的板子不受影响。RV1126B 等未适配板型直接正常启动。
@@ -262,7 +264,7 @@ mkfirmware 必须在宿主机执行:buildroot 的 host 工具容器里跑不了(
 - 区分逻辑:芯片级(`RK_UBOOT_DEFCONFIG`、rkbin loader)/ 板级(`RK_KERNEL_DIR` 选内核树 + `RK_KERNEL_DTS`,核心)/ 系统级(rootfs、分区表 parameter)
 - 现有板子(RK3566 两块 + RV1126B 两块,`rk356x/BoardConfig.mk` 默认项已改指 SATA 板):
   - `BoardConfig-rk3566-nvr-ddr3-v1.0.mk`:NVR 无 SATA 板(硬件同为 V1.0,旧命名 v10 已统一为 v1.0),单网口(千兆 gmac1),8颗 8bit DDR3,**kernel** + DTS `rk3566-nvr-ddr3-v1.0`(override 风格,基于官方 box-demo dtsi,含电源域 1.8V/RGMII 时延等实板参数)+ defconfig 片段 `nvr.config`
-  - `BoardConfig-rk3566-nvr-ddr3-sata-v1.0.mk`:NVR SATA 板(原理图 UMI-NVR-RK3566-V1.0),双网口(千兆 gmac1 + 板载 USB 百兆 RTL8152,见下文网口章节),DTS `rk3566-nvr-ddr3-sata-v1.0` include 无 SATA 板 dts 只维护差异:SATA 硬盘位(sata2/combphy2,combphy1 保留 USB3 host)、RK809-5 PMIC(box.dtsi 占位 regulator 删除后按原 label 重建,vdd_cpu 仍 PWM 调压)、HYM8563 RTC、RK809 codec 声卡;内核配置与无 SATA 板完全一致
+  - `BoardConfig-rk3566-nvr-ddr3-sata-v1.0.mk`:NVR SATA 板(原理图 UMI-NVR-RK3566-V2.1,仓库根目录;V1.0 已删,与 V2.1 仅灯路不同),双网口(千兆 gmac1 + 板载 USB 百兆 RTL8152,见下文网口章节),DTS `rk3566-nvr-ddr3-sata-v1.0` include 无 SATA 板 dts 只维护差异:SATA 硬盘位(sata2/combphy2,combphy1 保留 USB3 host)、RK809-5 PMIC(box.dtsi 占位 regulator 删除后按原 label 重建,vdd_cpu 仍 PWM 调压)、HYM8563 RTC、RK809 codec 声卡;内核配置与无 SATA 板完全一致
   - `rv1126b/BoardConfig-rv1126b-evb1-v10.mk`:RV1126B 官方 EVB1 V10 标准配置,DTS `rv1126b-evb1-v10`
     (官方树自带),内核 defconfig `rv1126b_defconfig`。**仅验证到能编出 uboot.img 与 boot.img**,
     rootfs/固件打包与真机启动都未做;`RK_CFG_BUILDROOT`/`RK_CFG_RECOVERY` 留空(buildroot 无 rv1126b 配置)
